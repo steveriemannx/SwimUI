@@ -1,0 +1,2 @@
+import BadCode
+print("x")

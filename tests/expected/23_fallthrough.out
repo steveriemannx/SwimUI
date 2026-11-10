@@ -1,0 +1,12 @@
+zero-one-two
+-one-two
+-two
+-many
+-many
+one other other
+even+positive +positive +other
+start-next! -next! -default!
+loop start
+loop middle
+loop middle
+loop end

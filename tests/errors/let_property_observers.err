@@ -1,0 +1,1 @@
+a 'let' constant cannot have property observers (willSet/didSet)

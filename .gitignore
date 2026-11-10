@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Swim build artifacts
+.Swim-cache/
+examples/*.nim
+examples/programs/*.nim
+
+# compiled programs and binaries
+*.out
+!tests/expected/*.out
+examples/hello
+examples/programs/*[!w]
+.installtest/
+
+# editors / OS
+.DS_Store
+.vscode/
+node_modules/
+
+# VS Code extension packages: build artifacts, never tracked or pushed
+*.vsix
+editors/vscode/Swim/*.vsix
+dist/
+
+# projects-main: Swim + nimx GUI demo (build artifacts, fetched deps)
+projects-main/.deps/
+projects-main/build/
+
+# The FerroUI binding: the built bridge and the artifacts of test runs
+build/
+ffi/target/

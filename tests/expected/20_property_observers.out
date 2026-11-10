@@ -1,0 +1,27 @@
+willSet 0 -> 100
+didSet 0 -> 100
+willSet 100 -> 101
+didSet 100 -> 101
+willSet 101 -> 100
+didSet 101 -> 100
+100 212
+now 2
+was 3
+now 1
+was 2
+entries: 1
+entries: 2
+entries: 3
+inventory [1]
+inventory [1, 2]
+inventory [1]
+[1]
+10
+balance changed
+tally 0 -> 5
+base 0 -> 3
+base 3 -> 5
+5
+2
+computed 2 -> 10
+[1, 2, 3]

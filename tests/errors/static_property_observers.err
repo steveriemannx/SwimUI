@@ -1,0 +1,1 @@
+property observers on static properties are not supported by Swim yet

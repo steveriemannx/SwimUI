@@ -1,0 +1,17 @@
+3
+constant
+12
+12
+101 103 106
+[alice, bob, charlie]
+[charlie, bob, alice]
+[bob, alice, charlie]
+[alice, bob, charlie]
+11
+20
+7
+56
+true
+true
+3
+alice=30,bob=20

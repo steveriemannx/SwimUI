@@ -1,0 +1,11 @@
+2 3
+6 30
+Matrix(cells: [[6, 2], [30, 4]])
+10 30
+5 0
+east west
+s m
+5 2
+10 20
+Stack(items: [10, 99])
+7

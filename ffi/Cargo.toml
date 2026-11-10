@@ -1,0 +1,22 @@
+[package]
+name = "ferroui-swim"
+description = "The C ABI behind the FerroUI native module of Swim: a flat, handle based bridge over the FerroUI control library"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+# The bridge is built on its own so that it can reuse the target directory of a
+# FerroUI checkout (scripts/build-ffi.sh) without joining that workspace.
+[workspace]
+
+[lib]
+name = "ferroui_swim"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+ferroui-base = { path = "../../FerroUI/src/FerroUI.Base" }
+ferroui-controls = { path = "../../FerroUI/src/FerroUI.Controls" }
+ferroui-desktop = { path = "../../FerroUI/src/FerroUI.Desktop" }
+ferroui-themes-simple = { path = "../../FerroUI/src/FerroUI.Themes.Simple" }

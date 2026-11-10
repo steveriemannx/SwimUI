@@ -1,0 +1,2 @@
+import NoSuchModule
+print("unreachable")
