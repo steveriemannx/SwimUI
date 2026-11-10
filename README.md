@@ -33,7 +33,7 @@ struct CounterApp {
     }
 
     static func main() {
-        setThemeVariant("dark")
+        setThemeVariant("light")
         launch(CounterApp().body)
     }
 }
@@ -256,7 +256,7 @@ struct LibraryApp {
     }
 
     static func main() {
-        setThemeVariant("dark")
+        setThemeVariant("light")
         launch(LibraryApp().body)
     }
 }
@@ -278,7 +278,10 @@ struct LibraryApp {
 Every view mounts as a FerroUI `Border` wrapper (padding, background, border,
 corner radius) around one host control; stacks are FerroUI `FlexPanel`s,
 `ZStack` is a `Panel`, lists and scroll views are `ScrollViewer`s, `Toggle` is a
-`ToggleSwitch`, and the theme (simple theme, dark/light) draws them.
+`ToggleSwitch`, and the theme (simple theme, light by default) draws them.  The
+palette follows the theme: `Color.background`, `.surface`, `.primary`,
+`.secondary` and `.accent` have a light and a dark value, and
+`setThemeVariant("dark")` switches both the FerroUI theme and the palette.
 
 ## The `FerroUI` native module
 

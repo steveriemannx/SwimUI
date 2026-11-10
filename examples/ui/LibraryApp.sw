@@ -158,7 +158,7 @@ func SearchField(_ model: LibraryModel) -> View {
 func Chip(_ title: String, _ active: Bool, _ action: () -> Void) -> View {
     var node = Text(title).font(.footnote)
     if active {
-        node = node.foregroundColor(Color.background).background(Color.accent)
+        node = node.foregroundColor(Color.white).background(Color.accent)
     } else {
         node = node.foregroundColor(Color.secondary).background(Color.clear)
     }
@@ -368,7 +368,7 @@ struct LibraryApp {
     }
 
     static func main() {
-        setThemeVariant("dark")
+        setThemeVariant("light")
         launch(LibraryApp().body)
     }
 }

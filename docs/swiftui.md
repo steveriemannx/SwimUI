@@ -53,7 +53,7 @@ struct CounterApp {
     }
 
     static func main() {
-        setThemeVariant("dark")
+        setThemeVariant("light")
         launch(CounterApp().body)
     }
 }
@@ -112,7 +112,7 @@ why the tests can read the text back out of the mounted controls.
 | --- | --- |
 | `View` | a view node; every constructor returns one, every modifier returns it |
 | `State<T>` | observable state: `let count = State(0)`, read `count.value` |
-| `Color` | `Color(0xRRGGBB)` / `Color(0xAARRGGBB)`; static colours: `.clear`, `.white`, `.black`, `.primary`, `.secondary`, `.accent`, `.red`, `.orange`, `.green`, `.background`, `.surface`, `.surface2` |
+| `Color` | `Color(0xRRGGBB)` / `Color(0xAARRGGBB)`; static colours: `.clear`, `.white`, `.black`, `.red`, `.orange`, `.green`, and the theme-aware `.primary`, `.secondary`, `.accent`, `.background`, `.surface`, `.surface2` (light values by default, dark after `setThemeVariant("dark")`) |
 | `Font` | `.largeTitle`, `.title`, `.title2`, `.title3`, `.headline`, `.body`, `.callout`, `.subheadline`, `.footnote`, `.caption`, `.caption2` |
 | `HorizontalAlignment` | `.leading`, `.center`, `.trailing` (VStack) |
 | `VerticalAlignment` | `.top`, `.center`, `.bottom` (HStack) |
@@ -174,7 +174,7 @@ why the tests can read the text back out of the mounted controls.
 | `WindowGroup(_ title: String, width: Int, height: Int, background: Color, borderless: Bool, _ content: () -> Void) -> Scene` | the window |
 | `launch(_ scene: Scene)` | start the application (blocks until the window closes) |
 | `runApp(_ title:width:height:_ content:)` | a shortcut for small programs |
-| `setThemeVariant(_ name: String)` | `"dark"`, `"light"` or `"system"`; call before `launch` |
+| `setThemeVariant(_ name: String)` | `"light"` (the default of the examples), `"dark"` or `"system"`; switches the FerroUI theme and the palette; call before `launch` |
 | `clientWidth()`, `clientHeight()` | the client area of the window |
 | `snapshot(after:path:)` | a PNG of the window, `milliseconds` from now |
 | `after(_ milliseconds: Int, _ action: () -> Void)` | run once, later, on the UI thread |

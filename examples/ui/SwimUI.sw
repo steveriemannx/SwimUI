@@ -144,6 +144,9 @@ let decorationsFull = 2
 // ---------------------------------------------------------------------------
 /// A colour: `Color(0xRRGGBB)` or `Color(0xAARRGGBB)`; `Color.clear` leaves a
 /// brush unset.
+/// Whether the palette is the dark one; `setThemeVariant` sets it.
+var usesDarkPalette = false
+
 struct Color {
     let value: Int
 
@@ -154,15 +157,26 @@ struct Color {
     static let clear = Color(-1)
     static let white = Color(0xFFFFFF)
     static let black = Color(0x000000)
-    static let primary = Color(0xF2F3F7)
-    static let secondary = Color(0x8A90A2)
-    static let accent = Color(0x5B8CFF)
-    static let red = Color(0xFF453A)
-    static let orange = Color(0xFF9F0A)
+    static let red = Color(0xFF3B30)
+    static let orange = Color(0xFF9500)
     static let green = Color(0x34C759)
-    static let background = Color(0x0B0C10)
-    static let surface = Color(0x151824)
-    static let surface2 = Color(0x232838)
+
+    // The palette follows the theme: light is the default (the examples use
+    // it); `setThemeVariant("dark")` switches to the dark values.
+    static var primary: Color { get { return themeColor(0x10131A, 0xF2F3F7) } }
+    static var secondary: Color { get { return themeColor(0x6B7280, 0x8A90A2) } }
+    static var accent: Color { get { return themeColor(0x2F6BFF, 0x5B8CFF) } }
+    static var background: Color { get { return themeColor(0xF2F3F7, 0x0B0C10) } }
+    static var surface: Color { get { return themeColor(0xFFFFFF, 0x151824) } }
+    static var surface2: Color { get { return themeColor(0xE4E8F0, 0x232838) } }
+}
+
+/// The light or the dark value of a palette colour.
+func themeColor(_ light: Int, _ dark: Int) -> Color {
+    if usesDarkPalette {
+        return Color(dark)
+    }
+    return Color(light)
 }
 
 /// A text style; `font(.title)` picks the size and the weight.
@@ -1402,8 +1416,15 @@ func WindowGroup(_ title: String = "", width: Int = 390, height: Int = 844,
 
 /// The theme variant of the application ("dark", "light" or "system"); call it
 /// before `launch`.
+/// Pick the theme: `"light"` (the default of the examples), `"dark"` or
+/// `"system"`.  Call it before `launch`.
 func setThemeVariant(_ name: String) {
     themeVariantName = name
+    if name == "dark" {
+        usesDarkPalette = true
+    } else {
+        usesDarkPalette = false
+    }
 }
 
 /// The size the layout has to fit in: the client area of the window.

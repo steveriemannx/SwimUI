@@ -47,7 +47,7 @@ struct CounterApp {
     }
 
     static func main() {
-        setThemeVariant("dark")
+        setThemeVariant("light")
         launch(CounterApp().body)
     }
 }
