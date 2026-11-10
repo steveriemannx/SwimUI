@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""End-to-end tests of the `FerroUI` native module and of the SwiftUI-shaped
-layer of SwimUI.
+"""End-to-end tests of the `FerroUI` native module and of the SwimUI view
+layer (which is shaped like SwiftUI).
 
 The binding is four layers -- the compiler table, the C shim
 (runtime/swimferroui.c), the Rust bridge (ffi/) and FerroUI itself -- with a
-declarative view layer (examples/ui/SwiftUI.sw) on top of it.  The tests check each
+declarative view layer (examples/ui/SwimUI.sw) on top of it.  The tests check each
 layer where it can be checked without a person in front of the screen:
 
 1. the compiler: `import FerroUI` resolves as a native module, `Swim emit`
@@ -16,7 +16,7 @@ layer where it can be checked without a person in front of the screen:
 3. the native module (tests/binding/NativeTest.sw): every control, the
    setters and getters, events raised as a pointer would raise them, timers and
    two snapshots that differ, with no failed bridge call;
-4. the layer (tests/binding/SwiftUITest.sw): state changes re-render and patch
+4. the layer (tests/binding/SwimUITest.sw): state changes re-render and patch
    the mounted controls in place (the text read back from the controls proves
    it), a click raised as a pointer would runs the button action, and the
    snapshot before and after the state change differ;
@@ -334,7 +334,7 @@ def test_native_module() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. The SwiftUI layer test
+# 5. The SwimUI layer test
 # ---------------------------------------------------------------------------
 LAYER_CHECKS = {
     "tapped": "true",
@@ -343,13 +343,13 @@ LAYER_CHECKS = {
 }
 
 
-def test_swiftui_layer() -> None:
+def test_swimui_layer() -> None:
     log("layer: state, re-render/patch, a click, snapshots")
     out = BUILD / "test"
-    binary = out / "SwiftUITest"
+    binary = out / "SwimUITest"
     if not binary.is_file():
-        raise Failure("build/test/SwiftUITest is missing (see the program test)")
-    base = out / "swiftui.png"
+        raise Failure("build/test/SwimUITest is missing (see the program test)")
+    base = out / "swimui.png"
     before = Path(str(base) + ".before.png")
     after = Path(str(base) + ".after.png")
     for path in (before, after, base):
@@ -359,7 +359,7 @@ def test_swiftui_layer() -> None:
                                 "SWIMUI_QUIT_MS": "1300"}, timeout=300)
     output = result.stdout + result.stderr
     if result.returncode != 0:
-        raise Failure("SwiftUITest did not exit cleanly:\n" + output)
+        raise Failure("SwimUITest did not exit cleanly:\n" + output)
     check_no_bridge_errors(output)
     seen = check_lines(output)
     assert_checks(seen, LAYER_CHECKS, output)
@@ -416,7 +416,7 @@ def main() -> int:
         ensure_bridge(arguments.no_build)
         test_programs()
         test_native_module()
-        test_swiftui_layer()
+        test_swimui_layer()
         test_demo()
     except Failure as failure:
         print()

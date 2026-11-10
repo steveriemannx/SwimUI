@@ -1,7 +1,7 @@
 // LibraryApp.sw -- the SwimUI demo: a phone-sized photo library written in
 // Swim with the SwiftUI-shaped layer over FerroUI.
 //
-//   import SwiftUI    declarative views, State, stacks, lists, controls
+//   import SwimUI    declarative views, State, stacks, lists, controls
 //   canvas            390 x 844 points, a borderless window
 //   run               ./scripts/run-demo.sh
 //
@@ -10,7 +10,7 @@
 // a photo row selects it, the two "+" buttons change the album and photo
 // counts, the bottom tabs switch and a toast reports what happened.
 
-import SwiftUI
+import SwimUI
 
 // ---------------------------------------------------------------------------
 // The model: observable state, owned by the app and read by the views

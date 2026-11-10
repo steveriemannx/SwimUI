@@ -1,4 +1,4 @@
-// SwiftUI.sw -- a declarative, SwiftUI-shaped view layer over the FerroUI
+// SwimUI.sw -- a declarative, SwiftUI-shaped view layer over the FerroUI
 // binding of SwimUI.
 //
 // A program writes views the SwiftUI way -- containers with trailing-closure

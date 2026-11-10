@@ -7,7 +7,7 @@ SwiftUI-like declarative views, state and modifiers, and drawn by the
 [FerroUI](https://github.com/wieslawsoltes/FerroUI) cross-platform UI framework.
 
 ```swift
-import SwiftUI
+import SwimUI
 
 final class CounterModel {
     let count = State(0)
@@ -79,7 +79,7 @@ Three projects, one stack:
 | --- | --- | --- |
 | Language | [Swim](docs/swim.md) | Swift syntax, compiled straight to C, atomic ARC, modules, a full standard library |
 | UI | [FerroUI](https://github.com/wieslawsoltes/FerroUI) | A retained-mode UI framework in Rust: properties, styling, themes, layout, text, native windows |
-| Binding + view layer | **SwimUI** (this repository) | `import FerroUI` in a `.sw` file, the SwiftUI-shaped layer (`import SwiftUI`), and the demo |
+| Binding + view layer | **SwimUI** (this repository) | `import FerroUI` in a `.sw` file, the SwiftUI-shaped layer (`import SwimUI`), and the demo |
 
 Swim's design goal is that a `.sw` file never mentions C: the generated program
 is C, but every token in a source file is Swift-style.  SwimUI keeps that rule
@@ -160,7 +160,7 @@ properties (set/get doubles, ints, strings, booleans, brushes, thicknesses,
 enums), flex layout and child grow, events and timers, and snapshots.  The ABI
 version is checked by the shim at start-up.
 
-**The view layer.**  `examples/ui/SwiftUI.sw` is an ordinary Swim module (not part of the
+**The view layer.**  `examples/ui/SwimUI.sw` is an ordinary Swim module (not part of the
 compiler) that builds a declarative tree (`VStack`, `Text`, `Button`,
 `TextField`, `Toggle`, `Slider`, `ProgressView`, `List`, `ScrollView`,
 `ZStack`, shapes, `Spacer`, `Divider`, `Group`, `ForEach`), lets modifiers
@@ -208,12 +208,12 @@ a documentation run drives it without a person:
 
 ## The SwiftUI-shaped layer
 
-`import SwiftUI` gives the declarative API.  The shape is SwiftUI's; where the
+`import SwimUI` gives the declarative API.  The shape is SwiftUI's; where the
 language or the binding cannot follow, [docs/swiftui.md](docs/swiftui.md) says
 exactly how it deviates.
 
 ```swift
-import SwiftUI
+import SwimUI
 
 let library = LibraryModel()          // the state lives in a model...
 
@@ -369,7 +369,7 @@ $ make ffi                # build the Rust bridge
 - **native module** (`tests/binding/NativeTest.sw`): every control kind, the
   setters and getters, the tree operations, events raised as a pointer would
   raise them, timers, and two snapshots that differ;
-- **layer** (`tests/binding/SwiftUITest.sw`): state changes re-render and patch
+- **layer** (`tests/binding/SwimUITest.sw`): state changes re-render and patch
   the mounted controls (the text read back from the controls proves it), a click
   raised as a pointer would runs the action, and the snapshots before and after
   differ;

@@ -61,7 +61,7 @@ done
 PROGRAM="$(cd "$(dirname "$PROGRAM")" && pwd)/$(basename "$PROGRAM")"
 [ -f "$PROGRAM" ] || { echo "run-demo.sh: no program at $PROGRAM" >&2; exit 1; }
 
-# The SwimUI view layer is the Swim module examples/ui/SwiftUI.sw next to the
+# The SwimUI view layer is the Swim module examples/ui/SwimUI.sw next to the
 # example programs; programs elsewhere (the tests) find it through SWIM_PATH.
 export SWIM_PATH="$ROOT/examples/ui${SWIM_PATH:+:$SWIM_PATH}"
 

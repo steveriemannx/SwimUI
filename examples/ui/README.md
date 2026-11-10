@@ -2,7 +2,7 @@
 
 | File | What it is |
 | --- | --- |
-| [`SwiftUI.sw`](SwiftUI.sw) | the declarative layer (the library the examples import): `View`, `State`, the containers, the controls, the modifiers, `Scene`/`WindowGroup`/`launch`, and the re-render/patch pass |
+| [`SwimUI.sw`](SwimUI.sw) | the declarative layer (the library the examples import): `View`, `State`, the containers, the controls, the modifiers, `Scene`/`WindowGroup`/`launch`, and the re-render/patch pass |
 | [`LibraryApp.sw`](LibraryApp.sw) | the demo: a phone-sized (390 × 844) photo library, fully interactive |
 | [`CounterApp.sw`](CounterApp.sw) | the smallest layer app: a counter with two buttons |
 | [`shots/demo.png`](shots/demo.png) | the demo's snapshot, written by `snapshot(...)` |
@@ -10,10 +10,10 @@
 A program imports the layer as a Swim module:
 
 ```swift
-import SwiftUI
+import SwimUI
 ```
 
-`SwiftUI.sw` itself imports `FerroUI`, so the merged program also has the flat
+`SwimUI.sw` itself imports `FerroUI`, so the merged program also has the flat
 module available.  The layer sits next to the programs that import it, so no
 `SWIM_PATH` is needed for them; programs elsewhere (the tests) find it through
 `SWIM_PATH=examples/ui` (`scripts/run-demo.sh` exports it).
@@ -21,7 +21,7 @@ module available.  The layer sits next to the programs that import it, so no
 ## Shape of an application
 
 ```swift
-import SwiftUI
+import SwimUI
 
 final class Model {
     let count = State(0)

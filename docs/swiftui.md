@@ -1,6 +1,6 @@
-# The SwiftUI-shaped layer (`examples/ui/SwiftUI.sw`)
+# The SwiftUI-shaped layer (`examples/ui/SwimUI.sw`)
 
-`import SwiftUI` (the module `examples/ui/SwiftUI.sw`) gives a declarative,
+`import SwimUI` (the module `examples/ui/SwimUI.sw`) gives a declarative,
 SwiftUI-shaped API on top of the
 `FerroUI` native module.  It is an ordinary Swim module — the compiler knows
 nothing about it — and it works in three stages: **build** a view tree, **mount**
@@ -19,7 +19,7 @@ it as FerroUI controls, and **patch** the mounted controls when state changes.
 ## A first app
 
 ```swift
-import SwiftUI
+import SwimUI
 
 final class CounterModel {
     let count = State(0)
@@ -279,12 +279,12 @@ These come from the language and the runtime, not from the idea of the layer:
 ## Adding a view
 
 1. **Node kind** — add a `viewX` constant next to the others in
-   `examples/ui/SwiftUI.sw`.
+   `examples/ui/SwimUI.sw`.
 2. **Constructor** — a function that creates `View(viewX)`, sets its fields and
    calls `emit` (that is what appends it to the enclosing container).
 3. **Host** — map the kind in `createHost` to a FerroUI kind of the bridge
    (`ffi/include/ferroui_swim.h`).
 4. **Properties** — set them in `applyView` (and any event subscription in
    `wireEvents`).
-5. **Tests** — extend `tests/binding/SwiftUITest.sw` with the view and the
+5. **Tests** — extend `tests/binding/SwimUITest.sw` with the view and the
    state it shows.

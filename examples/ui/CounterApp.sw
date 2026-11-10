@@ -1,6 +1,6 @@
 // CounterApp.sw -- the smallest SwiftUI-shaped SwimUI program.
 
-import SwiftUI
+import SwimUI
 
 final class CounterModel {
     let count = State(0)

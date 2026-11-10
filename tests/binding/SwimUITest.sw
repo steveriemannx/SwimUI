@@ -1,15 +1,15 @@
-// SwiftUITest.sw -- drives the SwiftUI-shaped layer: state changes, the
+// SwimUITest.sw -- drives the SwimUI (SwiftUI-shaped) layer: state changes, the
 // re-render/patch pass, a button click raised as a pointer would, the text of
 // the mounted controls and two snapshots.  tests/binding_test.py runs it.
 //
 //   tests/binding_test.py
 //   SWIMUI_IMAGE=build/test/swiftui.png SWIMUI_QUIT_MS=1300 \
-//       ./build/test/SwiftUITest
+//       ./build/test/SwimUITest
 //
 // Environment: SWIMUI_IMAGE is the base of `<path>.before.png` and
 // `<path>.after.png`, SWIMUI_QUIT_MS when to close the window.
 
-import SwiftUI
+import SwimUI
 
 final class TestRow {
     let title: String
@@ -122,9 +122,9 @@ func TestView() -> View {
 }
 
 @main
-struct SwiftUITestApp {
+struct SwimUITestApp {
     var body: Scene {
-        WindowGroup("SwiftUI test", width: 320, height: 560,
+        WindowGroup("SwimUI test", width: 320, height: 560,
                     background: Color.background) {
             TestView()
         }
@@ -132,6 +132,6 @@ struct SwiftUITestApp {
 
     static func main() {
         setThemeVariant("dark")
-        launch(SwiftUITestApp().body)
+        launch(SwimUITestApp().body)
     }
 }

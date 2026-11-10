@@ -16,7 +16,7 @@ help:
 	@echo "make ffi-release    build the Rust bridge (optimised)"
 	@echo "make demo           build and run the SwimUI demo"
 	@echo "make demo-snapshot  write examples/ui/shots/demo.png and quit"
-	@echo "make binding-scene  run the scripted SwiftUI-layer scene"
+	@echo "make binding-scene  run the scripted view-layer scene"
 	@echo "make clean          clean caches and generated files"
 	@echo "make version        print the compiler version"
 
@@ -61,7 +61,7 @@ demo-snapshot:
 	./scripts/run-demo.sh --snapshot examples/ui/shots/demo.png
 
 binding-scene:
-	./scripts/run-demo.sh --program tests/binding/SwiftUITest.sw \
+	./scripts/run-demo.sh --program tests/binding/SwimUITest.sw \
 		--snapshot build/scene.png
 
 clean:
