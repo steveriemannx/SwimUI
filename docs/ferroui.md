@@ -268,7 +268,8 @@ A program reads the environment at run time to drive itself without a person:
 | `SWIMUI_QUIT_MS` | `ferrouiAutoQuitMs()` returns it; a program closes the window after that time |
 | `SWIMUI_THEME_VARIANT` | the theme variant, read by the bridge at start-up |
 
-That is what produced [`ui/shots/demo.png`](../ui/shots/demo.png) and what
+That is what produced [`examples/ui/shots/demo.png`](../examples/ui/shots/demo.png)
+and what
 `tests/binding_test.py` uses.
 
 ## The C shim

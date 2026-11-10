@@ -4,14 +4,14 @@ layer of SwimUI.
 
 The binding is four layers -- the compiler table, the C shim
 (runtime/swimferroui.c), the Rust bridge (ffi/) and FerroUI itself -- with a
-declarative view layer (ui/SwiftUI.sw) on top of it.  The tests check each
+declarative view layer (examples/ui/SwiftUI.sw) on top of it.  The tests check each
 layer where it can be checked without a person in front of the screen:
 
 1. the compiler: `import FerroUI` resolves as a native module, `Swim emit`
    emits `#include "swimferroui.h"` and the `swimferroui_*` calls, a call
    without the import is reported, and the retired `import Nimx` explains
    itself;
-2. the programs: every program under ui/ and tests/binding/ type-checks and
+2. the programs: every program under examples/ui/ and tests/binding/ type-checks and
    builds, with the C shim compiled in and the bridge linked;
 3. the native module (tests/binding/NativeTest.sw): every control, the
    setters and getters, events raised as a pointer would raise them, timers and
@@ -20,7 +20,7 @@ layer where it can be checked without a person in front of the screen:
    the mounted controls in place (the text read back from the controls proves
    it), a click raised as a pointer would runs the button action, and the
    snapshot before and after the state change differ;
-5. the demo (ui/LibraryApp.sw): it runs, writes a 390 x 844 PNG with content,
+5. the demo (examples/ui/LibraryApp.sw): it runs, writes a 390 x 844 PNG with content,
    quits by itself and reports no failed bridge call.
 
 Usage:
@@ -44,7 +44,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SWIM = ROOT / "bin" / "Swim"
 BUILD = ROOT / "build"
-UI = ROOT / "ui"
+UI = ROOT / "examples" / "ui"
 BINDING = ROOT / "tests" / "binding"
 BRIDGE = {
     "Darwin": BUILD / "libferroui_swim.dylib",
@@ -255,10 +255,10 @@ def test_compiler() -> None:
 # 2. Build every program of the binding
 # ---------------------------------------------------------------------------
 def test_programs() -> None:
-    log("programs: the view layer, the demo and the tests")
+    log("programs: the view layer, the examples and the tests")
     programs = sorted(UI.glob("*.sw")) + sorted(BINDING.glob("*.sw"))
     if not programs:
-        raise Failure("no Swim programs under ui/ or tests/binding/")
+        raise Failure("no Swim programs under examples/ui/ or tests/binding/")
     out = BUILD / "test"
     out.mkdir(parents=True, exist_ok=True)
     for program in programs:

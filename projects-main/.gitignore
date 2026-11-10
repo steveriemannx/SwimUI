@@ -1,4 +1,0 @@
-# fetch-deps.sh clones here
-.deps/
-# run.sh build output (binary + macOS .app)
-build/

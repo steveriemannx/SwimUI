@@ -5,6 +5,9 @@
 > and the SwiftUI-shaped view layer ([`docs/swiftui.md`](swiftui.md)).  The
 > compiler in this checkout has a few fixes the UI needed; the root
 > [`README.md`](../README.md) lists them and is the entry point of SwimUI.
+> The retired `projects-main/` nimx GUI demo of the upstream repository is not
+> part of this checkout: SwimUI replaces it with the FerroUI examples under
+> [`examples/ui/`](../examples/ui/).
 
 # Swim
 
@@ -87,8 +90,8 @@ Repository: <https://github.com/steveriemannx/Swim>
 - **Native GUI modules (retired)**: the previous Nim backend exposed the
   [nimx](https://github.com/yglukhov/nimx) GUI toolkit through `import Nimx`.
   The direct C backend has no GUI module yet; the example app in
-  `projects-main/` is kept for historical reference and does not build with
-  the C backend.
+  `projects-main/` was kept in the upstream repository for historical reference
+  and is not part of this checkout.
 - **Broader standard library**: array/string range slicing, `zip`,
   `compactMap`/`flatMap`, Set algebra (`union`, `intersection`,
   `subtracting`, `isSubset(of:)`, ...), `Dictionary.mapValues`/`filter`,
@@ -586,7 +589,8 @@ module import graph for main.sw (execution order, dependencies first):
 The Nim backend used to expose Nim libraries (most notably the nimx GUI
 toolkit) as *native modules*. The direct C backend does not support that
 mechanism: `import Nimx` is rejected, and every program is built from the
-emitted C plus `runtime/swimrt*.c`. `projects-main/` keeps the retired GUI
+emitted C plus `runtime/swimrt*.c`. (The upstream repository keeps the retired GUI
+demo in a `projects-main/` directory, which this checkout does not include.)
 demo for historical reference.
 
 ## How it works
@@ -711,7 +715,6 @@ Swim/
 ├── examples/                 # getting-started examples
 ├── docs/                     # language reference and implementation notes
 ├── editors/vscode/Swim/      # VS Code syntax highlighting extension
-├── projects-main/            # legacy nimx GUI demo (not built by the C backend)
 ├── install.sh
 ├── LICENSE                   # MIT
 └── README.md

@@ -24,10 +24,6 @@ node_modules/
 editors/vscode/Swim/*.vsix
 dist/
 
-# projects-main: Swim + nimx GUI demo (build artifacts, fetched deps)
-projects-main/.deps/
-projects-main/build/
-
 # The FerroUI binding: the built bridge and the artifacts of test runs
 build/
 ffi/target/

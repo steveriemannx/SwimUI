@@ -11,11 +11,11 @@ help:
 	@echo "make test-all       both suites"
 	@echo "make test-update    regenerate expected outputs"
 	@echo "make examples       run all example programs"
-	@echo "make check          compile-check all examples, tests and ui/"
+	@echo "make check          compile-check all examples, tests and examples/ui/"
 	@echo "make ffi            build the Rust bridge (debug)"
 	@echo "make ffi-release    build the Rust bridge (optimised)"
 	@echo "make demo           build and run the SwimUI demo"
-	@echo "make demo-snapshot  write ui/shots/demo.png and quit"
+	@echo "make demo-snapshot  write examples/ui/shots/demo.png and quit"
 	@echo "make binding-scene  run the scripted SwiftUI-layer scene"
 	@echo "make clean          clean caches and generated files"
 	@echo "make version        print the compiler version"
@@ -42,11 +42,11 @@ check:
 		tests/projects/*/main.sw; do \
 		$(SWIM) check "$$f" >/dev/null || exit 1; \
 	done
-	@export SWIM_PATH="$(ROOT)/ui" ; \
-	for f in ui/*.sw tests/binding/*.sw; do \
+	@export SWIM_PATH="$(ROOT)/examples/ui" ; \
+	for f in examples/ui/*.sw tests/binding/*.sw; do \
 		$(SWIM) check "$$f" >/dev/null || exit 1; \
 	done
-	@echo "all examples, tests and ui/ programs type-check"
+	@echo "all examples, tests and examples/ui programs type-check"
 
 ffi:
 	./scripts/build-ffi.sh
@@ -58,7 +58,7 @@ demo:
 	./scripts/run-demo.sh
 
 demo-snapshot:
-	./scripts/run-demo.sh --snapshot ui/shots/demo.png
+	./scripts/run-demo.sh --snapshot examples/ui/shots/demo.png
 
 binding-scene:
 	./scripts/run-demo.sh --program tests/binding/SwiftUITest.sw \

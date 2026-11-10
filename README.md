@@ -44,9 +44,10 @@ $ ./scripts/build-ffi.sh      # build the FerroUI bridge (once)
 $ ./scripts/run-demo.sh       # build and run the demo below
 ```
 
-![The SwimUI demo: a phone-sized photo library drawn by FerroUI](ui/shots/demo.png)
+![The SwimUI demo: a phone-sized photo library drawn by FerroUI](examples/ui/shots/demo.png)
 
-The demo (`ui/LibraryApp.sw`, 390 × 844 points, a borderless phone-sized window)
+The demo (`examples/ui/LibraryApp.sw`, 390 × 844 points, a borderless phone-sized
+window)
 is interactive: the segmented control swaps the hero file, the slider moves the
 upload percent, the switch toggles the backup mode, tapping a photo row selects
 it, the two `+` buttons change the album and photo counts, the bottom tabs
@@ -86,7 +87,7 @@ for FerroUI — a program calls a small, flat surface of `Int` handles, numbers,
 strings, booleans and `() -> Void` closures, and never sees a C type.
 
 ```
-  ui/LibraryApp.sw             a program in Swift syntax (SwiftUI-shaped)
+  examples/ui/LibraryApp.sw    a program in Swift syntax (SwiftUI-shaped)
         │
   src/swimc/                   the Swim compiler: lexer, parser, types, checker,
         │                      codegen_c, cli
@@ -159,7 +160,7 @@ properties (set/get doubles, ints, strings, booleans, brushes, thicknesses,
 enums), flex layout and child grow, events and timers, and snapshots.  The ABI
 version is checked by the shim at start-up.
 
-**The view layer.**  `ui/SwiftUI.sw` is an ordinary Swim module (not part of the
+**The view layer.**  `examples/ui/SwiftUI.sw` is an ordinary Swim module (not part of the
 compiler) that builds a declarative tree (`VStack`, `Text`, `Button`,
 `TextField`, `Toggle`, `Slider`, `ProgressView`, `List`, `ScrollView`,
 `ZStack`, shapes, `Spacer`, `Divider`, `Group`, `ForEach`), lets modifiers
@@ -175,17 +176,17 @@ toolchain (cargo), and a checkout of **FerroUI** next to this one (`../FerroUI`;
 
 ```console
 $ ./scripts/build-ffi.sh      # build the Rust bridge into build/ (once)
-$ ./scripts/run-demo.sh       # build and run ui/LibraryApp.sw
+$ ./scripts/run-demo.sh       # build and run examples/ui/LibraryApp.sw
 ```
 
 Useful commands:
 
 ```console
-$ ./scripts/run-demo.sh --snapshot ui/shots/demo.png   # one frame, then quit
+$ ./scripts/run-demo.sh --snapshot examples/ui/shots/demo.png  # one frame, then quit
 $ ./scripts/run-demo.sh --smoke                        # the same, for a test
 $ ./scripts/run-demo.sh --no-run                       # build only
-$ ./scripts/run-demo.sh --program ui/CounterApp.sw     # a smaller program
-$ ./bin/Swim run ui/LibraryApp.sw                      # after the bridge is built
+$ ./scripts/run-demo.sh --program examples/ui/CounterApp.sw  # a smaller program
+$ ./bin/Swim run examples/ui/LibraryApp.sw             # after the bridge is built
 ```
 
 `./bin/Swim` is the compiler launcher, exactly as in Swim: `Swim run`,
@@ -316,11 +317,11 @@ runtime/swimrt*.c, .h        the Swim runtime (from Swim, unmodified)
 runtime/swimferroui.c, .h    the C shim of the FerroUI binding (new)
 ffi/                         the Rust bridge `ferroui-swim`, a cdylib (extended)
   include/ferroui_swim.h     its C ABI, the contract of the two sides
-ui/SwiftUI.sw                the SwiftUI-shaped declarative layer (new)
-ui/LibraryApp.sw             the demo in the screenshot
-ui/CounterApp.sw             the smallest layer app
-ui/shots/demo.png            the demo's snapshot
-projects-main/               the retired Swim + nimx GUI demo (from Swim)
+examples/                    the language examples of Swim
+  ui/SwiftUI.sw              the SwiftUI-shaped declarative layer (new)
+  ui/LibraryApp.sw           the demo in the screenshot
+  ui/CounterApp.sw           the smallest layer app
+  ui/shots/demo.png          the demo's snapshot
 scripts/build-ffi.sh         build the bridge into build/
 scripts/run-demo.sh          build and run a program of the binding
 tests/binding/               the binding's Swim programs (native + layer)
@@ -352,7 +353,7 @@ The `Swim test` suite passes unchanged (73 cases, including the two new ones).
 ```console
 $ make test               # the Swim compiler and runtime suite (73 tests)
 $ make test-binding       # the end-to-end test of the FerroUI binding
-$ make check              # type-check the examples, the tests and ui/
+$ make check              # type-check the examples, the tests and examples/ui/
 $ make demo               # build and run the demo
 $ make ffi                # build the Rust bridge
 ```
@@ -362,7 +363,7 @@ $ make ffi                # build the Rust bridge
 - **compiler**: `import FerroUI` resolves, the emitted C includes the shim,
   calls `swimferroui_*`, and a call without the import or the retired
   `import Nimx` is an error;
-- **programs**: every program under `ui/` and `tests/binding/` builds with the
+- **programs**: every program under `examples/ui/` and `tests/binding/` builds with the
   shim compiled in and the bridge linked;
 - **native module** (`tests/binding/NativeTest.sw`): every control kind, the
   setters and getters, the tree operations, events raised as a pointer would

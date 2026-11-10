@@ -1,6 +1,7 @@
-# The SwiftUI-shaped layer (`ui/SwiftUI.sw`)
+# The SwiftUI-shaped layer (`examples/ui/SwiftUI.sw`)
 
-`import SwiftUI` gives a declarative, SwiftUI-shaped API on top of the
+`import SwiftUI` (the module `examples/ui/SwiftUI.sw`) gives a declarative,
+SwiftUI-shaped API on top of the
 `FerroUI` native module.  It is an ordinary Swim module — the compiler knows
 nothing about it — and it works in three stages: **build** a view tree, **mount**
 it as FerroUI controls, and **patch** the mounted controls when state changes.
@@ -58,7 +59,8 @@ struct CounterApp {
 }
 ```
 
-`ui/CounterApp.sw` is this program; `ui/LibraryApp.sw` is the full demo.
+`examples/ui/CounterApp.sw` is this program; `examples/ui/LibraryApp.sw` is the
+full demo.
 
 ## How it works
 
@@ -276,7 +278,8 @@ These come from the language and the runtime, not from the idea of the layer:
 
 ## Adding a view
 
-1. **Node kind** — add a `viewX` constant next to the others in `ui/SwiftUI.sw`.
+1. **Node kind** — add a `viewX` constant next to the others in
+   `examples/ui/SwiftUI.sw`.
 2. **Constructor** — a function that creates `View(viewX)`, sets its fields and
    calls `emit` (that is what appends it to the enclosing container).
 3. **Host** — map the kind in `createHost` to a FerroUI kind of the bridge

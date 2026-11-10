@@ -4,14 +4,14 @@
 # The bridge library (`scripts/build-ffi.sh`) is built on demand; the program is
 # compiled by Swim (which compiles the C shim `runtime/swimferroui.c` into it and
 # links the bridge) and started in this terminal.  The default program is the
-# SwimUI demo (`ui/LibraryApp.sw`).
+# SwimUI demo (`examples/ui/LibraryApp.sw`).
 #
 #   scripts/run-demo.sh                       run the demo
-#   scripts/run-demo.sh --snapshot ui/shots/demo.png
+#   scripts/run-demo.sh --snapshot examples/ui/shots/demo.png
 #                                             snapshot the window, then quit
 #   scripts/run-demo.sh --smoke               one frame, then quit (for tests)
 #   scripts/run-demo.sh --no-run              build only
-#   scripts/run-demo.sh --program ui/CounterApp.sw
+#   scripts/run-demo.sh --program examples/ui/CounterApp.sw
 #   scripts/run-demo.sh -- <arg> ...          pass arguments to the program
 #
 # A program reads two environment variables at run time, which is how a test or
@@ -25,7 +25,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 SWIM="$ROOT/bin/Swim"
 
-PROGRAM="$ROOT/ui/LibraryApp.sw"
+PROGRAM="$ROOT/examples/ui/LibraryApp.sw"
 OUT="$ROOT/build/demo"
 SNAPSHOT=""
 SMOKE=0
@@ -61,9 +61,9 @@ done
 PROGRAM="$(cd "$(dirname "$PROGRAM")" && pwd)/$(basename "$PROGRAM")"
 [ -f "$PROGRAM" ] || { echo "run-demo.sh: no program at $PROGRAM" >&2; exit 1; }
 
-# The SwimUI view layer is the Swim module ui/SwiftUI.sw; programs elsewhere
-# (the tests) find it through SWIM_PATH.
-export SWIM_PATH="$ROOT/ui${SWIM_PATH:+:$SWIM_PATH}"
+# The SwimUI view layer is the Swim module examples/ui/SwiftUI.sw next to the
+# example programs; programs elsewhere (the tests) find it through SWIM_PATH.
+export SWIM_PATH="$ROOT/examples/ui${SWIM_PATH:+:$SWIM_PATH}"
 
 case "$(uname -s)" in
   Darwin) BRIDGE="$ROOT/build/libferroui_swim.dylib" ;;
