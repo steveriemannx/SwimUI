@@ -317,7 +317,8 @@ runtime/swimrt*.c, .h        the Swim runtime (from Swim, unmodified)
 runtime/swimferroui.c, .h    the C shim of the FerroUI binding (new)
 ffi/                         the Rust bridge `ferroui-swim`, a cdylib (extended)
   include/ferroui_swim.h     its C ABI, the contract of the two sides
-examples/                    the language examples of Swim
+examples/                    the language examples of Swim, and the SwimUI
+                             examples in ui/
   ui/SwiftUI.sw              the SwiftUI-shaped declarative layer (new)
   ui/LibraryApp.sw           the demo in the screenshot
   ui/CounterApp.sw           the smallest layer app
