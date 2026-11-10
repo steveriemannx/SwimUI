@@ -1,365 +1,348 @@
 # The `FerroUI` native module
 
 This document is the reference of the binding at the centre of SwimUI: what a
-`.sw` program sees when it writes `import FerroUI`, what the Nim side
-(`runtime/swimferroui.nim`) adds, and what the Rust bridge (`ffi/`) does.
+`.sw` program sees when it writes `import FerroUI`, how the compiler knows the
+module, what the C shim and the Rust bridge do, and how to add a function.
 
-- [The three sides](#the-three-sides)
-- [Building the bridge](#building-the-bridge)
-- [A program's lifecycle](#a-programs-lifecycle)
-- [The Swift-facing functions](#the-swift-facing-functions)
-- [Colours, alignment and handles](#colours-alignment-and-handles)
-- [Reading properties back](#reading-properties-back)
-- [Timers, snapshots and test builds](#timers-snapshots-and-test-builds)
-- [The Swift-style view layer (ui/SwimUI.sw)](#the-swift-style-view-layer-uiswimuisw)
-- [The C ABI of the bridge](#the-c-abi-of-the-bridge)
-- [Adding a control](#adding-a-control)
+- [The four sides](#the-four-sides)
+- [The compiler's part](#the-compilers-part)
+- [The functions](#the-functions)
+- [Identifiers and values](#identifiers-and-values)
+- [The application lifecycle](#the-application-lifecycle)
+- [Closures](#closures)
+- [Errors](#errors)
+- [Tests and documentation runs](#tests-and-documentation-runs)
+- [The C shim](#the-c-shim)
+- [The Rust bridge](#the-rust-bridge)
+- [Adding a function](#adding-a-function)
 - [Limitations](#limitations)
 
 ---
 
-## The three sides
+## The four sides
 
 ```
-  .sw source        import FerroUI  →  the compiler emits `import swimferroui`
-      │              and turns `ferrouiLabel(...)` into `swimFerroUILabel(...)`
-  runtime/swimferroui.nim           Int handles, colours, closures, composition
-      │              calls the C ABI with {.importc, cdecl, dynlib.}
-  ffi/ (Rust, cdylib)               hosts FerroUI: AppBuilder, controls, window
-      │
-  FerroUI (Rust crates)             the framework itself
+  .sw source        import FerroUI  →  the compiler emits `#include
+        │              "swimferroui.h"` and calls of the `swimferroui_*` shim
+  runtime/swimferroui.c           the C shim: SwimValue ↔ the flat C ABI,
+        │                         colours, closure cells, error reporting
+  build/libferroui_swim.dylib     the Rust bridge (ffi/): application, tree,
+        │                         window, properties, events
+  FerroUI (Rust)                  the framework itself
 ```
 
-The compiler's table of the module is `FERROUI_FUNCS` in
-`src/swimc/codegen.py`; its kinds are `int`, `double`, `string`, `bool` and
-`closure` (`() -> Void`, which also accepts the trailing-closure syntax).  The
-Nim file and the table must stay in sync: the anonymous name and the argument
-list of each entry are the Nim procedure the call becomes.
+The language itself never sees C: a `.sw` file uses `Int`, `Double`, `String`,
+`Bool` and `() -> Void` and the `ferroui*` names of the module.
 
-## Building the bridge
+## The compiler's part
 
-```console
-$ ./scripts/build-ffi.sh                # debug build, into build/
-$ ./scripts/build-ffi.sh --release      # optimised build
-```
+`import FerroUI` is a *native module* of the SwimUI fork of Swim.  Four places
+know about it:
 
-The script builds `ffi/Cargo.toml` (a `cdylib` crate, `ferroui-swim`) and copies
-the library into `build/`, where `runtime/swimferroui.nim` looks for it:
-
-| Platform | The library |
+| Place | What it does |
 | --- | --- |
-| macOS | `build/libferroui_swim.dylib` |
-| Linux | `build/libferroui_swim.so` |
-| Windows | `build/ferroui_swim.dll` |
+| `src/swimc/modules.py` | `NATIVE_MODULES = {"FerroUI": ...}`; the import is recorded on the project and the Nim-era `Nimx`/`Zeta` are rejected with an explanation |
+| `src/swimc/native_ferroui.py` | `FERROUI_FUNCS`: the table of the module — Swift name → (C function, `[(label, kind)]`, result kind), plus the shim file names and the library name |
+| `src/swimc/checker.py` | `infer_native_call`: the import is required, labels must exist, arguments must be present once and have the kind's type (`int`, `double`, `string`, `bool`, `closure`) |
+| `src/swimc/codegen_c.py` | emits `#include "swimferroui.h"` when the module is imported and turns each call into a direct C call with the arguments in the table's order |
+| `src/swimc/cli.py` | compiles `runtime/swimferroui.c` into the program, adds `ffi/include` to the include path, links `-L build -lferroui_swim` (plus an rpath) and covers the shim and headers in the build cache key |
 
-Environment:
+So a program needs no manual C flags: `Swim build app.sw -o app` produces an
+executable that loads `build/libferroui_swim.dylib` next to it (or
+`$SWIM_FERROUI_LIB_DIR`).  `Swim emit` shows the C, including the shim calls.
 
-- `FERROUI_DIR` — the FerroUI checkout to build against (default `../FerroUI`
-  next to this repository).  A checkout somewhere else is written into a
-  generated manifest under `build/ffi-manifest/`, so `ffi/Cargo.toml` keeps
-  working as it is.
-- `FERROUI_TARGET_DIR` — cargo's target directory (default
-  `$FERROUI_DIR/target`, which reuses a FerroUI build that already exists).
-- `CARGO`, `CARGO_INCREMENTAL`.
+## The functions
 
-`-d:swimFerroUILibDir=<dir>` at *Swim* build time makes the runtime look for the
-library in `<dir>` instead of `build/` (useful for a packaged application).
+The Swift names are the ones in `native_ferroui.FERROUI_FUNCS`; each maps to the
+C function of the shim of the same name (`ferrouiRun` → `swimferroui_run`).
 
-The FerroUI crates come from `FERROUI_DIR/src/*` as ordinary path dependencies;
-`ferroui-swim` itself uses `ferroui-base`, `ferroui-controls`, `ferroui-desktop`
-(the platform entry point: windowing, Skia, HarfBuzz) and
-`ferroui-themes-simple`.
+### Application
 
-## A program's lifecycle
+| Swift | Arguments | Result |
+| --- | --- | --- |
+| `ferrouiRun` | `build: () -> Void` (trailing closure allowed) | — |
+| `ferrouiQuit` | — | — |
+| `ferrouiAfter` | `ms: Int`, `action: () -> Void` | — |
+| `ferrouiLog` | `message: String` | — |
+| `ferrouiVersion` | — | `String` |
+| `ferrouiSetThemeVariant` | `name: String` (`"dark"`, `"light"`, `"system"`); call before `ferrouiRun` | — |
+
+### Window
+
+| Swift | Arguments | Result |
+| --- | --- | --- |
+| `ferrouiWindow` | `width: Int`, `height: Int`, `title: String`, `background: Int`, `onClosed: () -> Void` | `Int` (handle) |
+| `ferrouiClientWidth` / `ferrouiClientHeight` | — | `Int` |
+| `ferrouiSetDecorations` | `window: Int`, `mode: Int` (0 none, 2 full) | — |
+| `ferrouiOnReady` | `window: Int`, `onReady: () -> Void` | — |
+| `ferrouiClose` | `window: Int` | — |
+| `ferrouiSnapshot` | `delayMs: Int`, `path: String` | — |
+
+### Tree
+
+| Swift | Arguments | Result |
+| --- | --- | --- |
+| `ferrouiCreate` | `parent: Int`, `kind: Int` | `Int` |
+| `ferrouiAddChild` | `parent: Int`, `child: Int` | — |
+| `ferrouiInsertChild` | `parent: Int`, `index: Int`, `child: Int` | — |
+| `ferrouiRemoveChild` | `parent: Int`, `child: Int` | — |
+| `ferrouiClearChildren` | `parent: Int` | — |
+| `ferrouiDestroy` | `handle: Int` | — |
+
+A control created with a `parent` is added to it: a panel gets a child, a
+border/scroll view/window/button gets its content.  `ferrouiAddChild` on the
+window sets the window's content.
+
+### Properties
+
+| Swift | Arguments |
+| --- | --- |
+| `ferrouiSetF64` | `handle: Int`, `property: Int`, `value: Double` |
+| `ferrouiSetI32` | `handle: Int`, `property: Int`, `value: Int` |
+| `ferrouiSetString` | `handle: Int`, `property: Int`, `value: String` |
+| `ferrouiSetBool` | `handle: Int`, `property: Int`, `value: Bool` |
+| `ferrouiSetColor` | `handle: Int`, `property: Int`, `argb: Int` |
+| `ferrouiSetThickness` | `handle: Int`, `property: Int`, `left/top/right/bottom: Int` |
+| `ferrouiSetEnum` | `handle: Int`, `property: Int`, `value: Int` |
+| `ferrouiSetFlex` | `handle: Int`, `direction/justify/align: Int`, `columnSpacing/rowSpacing: Int` |
+| `ferrouiSetGrow` | `handle: Int`, `grow: Double` |
+| `ferrouiSetFrame` | `handle: Int`, `x/y/width/height: Int` (a canvas position and size) |
+
+Reads: `ferrouiGetValue(handle:) -> Double`, `ferrouiGetText(handle:) -> String`,
+`ferrouiGetChecked(handle:) -> Bool`, `ferrouiGetVisible(handle:) -> Bool`.
+
+### Events
+
+| Swift | Arguments |
+| --- | --- |
+| `ferrouiOnTap` | `handle: Int`, `action: () -> Void` (a button click, or a tap on any other control) |
+| `ferrouiOnTextChanged` | `handle: Int`, `action: () -> Void` |
+| `ferrouiOnCheckedChanged` | `handle: Int`, `action: () -> Void` |
+| `ferrouiOnValueChanged` | `handle: Int`, `action: () -> Void` |
+
+All callbacks run on the UI thread.  A subscription lives until the application
+ends.
+
+### Tests
+
+| Swift | Arguments | Result |
+| --- | --- | --- |
+| `ferrouiRaiseClick` | `handle: Int` | — (raises a button click as a pointer would) |
+| `ferrouiImagePath` | — | `String` (the `SWIMUI_IMAGE` environment variable) |
+| `ferrouiAutoQuitMs` | — | `Int` (the `SWIMUI_QUIT_MS` environment variable) |
+
+## Identifiers and values
+
+### Control kinds (`ferrouiCreate`)
+
+| Value | Control |
+| --- | --- |
+| 1 | `Canvas` (children at absolute positions) |
+| 2 | `StackPanel` |
+| 3 | `Border` (single content; background, corners, border, padding) |
+| 4 | `TextBlock` |
+| 5 | `Button` |
+| 6 | `TextBox` |
+| 7 | `CheckBox` |
+| 8 | `Slider` |
+| 9 | `ProgressBar` |
+| 10 | `ScrollViewer` |
+| 11 | `Panel` (children on top of each other) |
+| 12 | `FlexPanel` (row/column flex layout) |
+| 13 | `ToggleSwitch` |
+
+### Double properties (`ferrouiSetF64`)
+
+`1` width, `2` height, `3` min width, `4` min height, `5` max width, `6` max
+height, `7` font size, `8` opacity, `9` corner radius, `10` spacing, `11`
+minimum, `12` maximum, `13` value, `14` line height.
+
+### Int properties (`ferrouiSetI32`)
+
+`1` max lines (text blocks).
+
+### String properties (`ferrouiSetString`)
+
+`1` text, `2` title, `3` watermark/placeholder, `4` content (a button or check
+box title).
+
+### Bool properties (`ferrouiSetBool`)
+
+`1` visible, `2` checked, `3` indeterminate, `4` enabled, `5` clip to bounds.
+
+### Brush properties (`ferrouiSetColor`)
+
+`1` background, `2` foreground, `3` border.  The value is `0xRRGGBB` or
+`0xAARRGGBB`; a negative value leaves the brush unset.
+
+### Thickness properties (`ferrouiSetThickness`)
+
+`1` margin, `2` padding, `3` border thickness.
+
+### Enum properties (`ferrouiSetEnum`)
+
+| Property | Values |
+| --- | --- |
+| 1 horizontal alignment | 0 stretch, 1 left, 2 center, 3 right |
+| 2 vertical alignment | 0 stretch, 1 top, 2 center, 3 bottom |
+| 3 orientation | 0 horizontal, 1 vertical |
+| 4 text alignment | 0 leading, 1 center, 2 trailing |
+| 5 text wrapping | 0 no wrap, 1 wrap, 2 wrap with overflow |
+| 6 font weight | 100…900 (`400` regular, `700` bold) |
+| 7 font style | 0 normal, 1 italic, 2 oblique |
+
+### Flex (`ferrouiSetFlex`, `ferrouiSetGrow`)
+
+Direction `0` row, `1` row-reverse, `2` column, `3` column-reverse; justify `0`
+start, `1` end, `2` center, `3` space-between, `4` space-around, `5`
+space-evenly; align-items `0` start, `1` end, `2` center, `3` stretch.
+`ferrouiSetGrow` sets the flex grow factor of a child of a flex panel — that is
+how a `Spacer` pushes the ends of a row apart.
+
+## The application lifecycle
 
 FerroUI is an application framework: the platform exists only after the
 application starts, and controls and windows are created after that.  A program
-therefore starts the application with
+starts it with
 
 ```swift
+ferrouiSetThemeVariant(name: "dark")   // optional, before run
+
 ferrouiRun {
-    // the framework is initialized here: build the window and the views
+    // the framework is initialized here: build the window and the controls
 }
 ```
 
 `ferrouiRun` blocks until the window closes.  Inside the block the program makes
-the window with `ferrouiWindow(...)` (one window per program) and the controls
-with `ferrouiCanvas`, `ferrouiBox`, `ferrouiLabel`, `ferrouiButton`,
-`ferrouiTextField`, `ferrouiCheckBox`, `ferrouiSlider`, `ferrouiProgressBar`,
-`ferrouiScrollView` and `ferrouiStack`.
+the window with `ferrouiWindow` (one window per program) and everything else
+with `ferrouiCreate`.
 
-The window's *client* area may be smaller than the size that was asked for: the
-window decorations take room, and a display that is not tall enough shortens the
-window.  The bridge reports what the client area really is, and the ready
-callback fires once the window is up:
+The *client* area of the window may be smaller than the size that was asked for
+(the decorations and the screen take room), and the final size is known when the
+window is open:
 
 ```swift
-ferrouiRun {
-    let window = ferrouiWindow(width: 390, height: 844, title: "Library",
-                               background: 0x0B0C10, onClosed: {})
-    let canvas = ferrouiCanvas(parent: window)
-    ferrouiOnReady(handle: window) {
-        let height = ferrouiClientHeight()   // what the layout must fit in
-        ...
-    }
+ferrouiOnReady(window: handle) {
+    let height = ferrouiClientHeight()   // what the layout must fit in
 }
 ```
 
-The `SwiftUI.sw` layer wraps this shape as `runApp { ... }` +
-`screen.onReady { ... }`.
+The SwiftUI-shaped layer wraps this shape as `launch(WindowGroup(...))`: it
+calls `ferrouiOnReady` itself and renders the view tree there.
 
-## The Swift-facing functions
+## Closures
 
-The names below are the ones a `.sw` source uses (`FERROUI_FUNCS`); the Nim
-procedure is what they become.
+A closure argument (`() -> Void`, the last parameter, so a trailing closure
+works) becomes a `SwimValue` closure that the shim retains and the bridge calls
+back on the UI thread.  A subscription lives until the application ends.
 
-### Application and window
+One language trap: a closure *stored in a property* must be bound to a local
+before it is called, otherwise the call compiles to a method lookup and does
+nothing:
 
-| Swift | Nim | Returns |
-| --- | --- | --- |
-| `ferrouiRun(build:)` / trailing closure | `swimFerroUIRun` | — |
-| `ferrouiQuit()` | `swimFerroUIQuit` | — |
-| `ferrouiWindow(width:height:title:background:onClosed:)` | `swimFerroUIWindow` | window handle |
-| `ferrouiClientWidth()`, `ferrouiClientHeight()` | `swimFerroUIClientWidth`, `…Height` | width/height in points |
-| `ferrouiSetDecorations(handle:mode:)` | `swimFerroUISetDecorations` | — |
-| `ferrouiSetThemeVariant(name:)` | `swimFerroUISetThemeVariant` | — |
-| `ferrouiOnReady(handle:onReady:)` | `swimFerroUIOnReady` | — |
-| `ferrouiClose(window:)` | `swimFerroUIClose` | — |
+```swift
+let action = view.tapAction!   // read it into a local…
+action()                       // …then call it
+```
 
-`ferrouiSetThemeVariant` is called before `ferrouiRun`: `"dark"`, `"light"` or
-anything else (follow the system; the environment variable
-`SWIMUI_THEME_VARIANT` does the same).  `ferrouiSetDecorations` takes `0` for a
-borderless window (a phone look), `1` for a border, `2` for the full
-decorations.
+## Errors
 
-### Containers
+A failed bridge call (a property a control does not have, an invalid handle, a
+wrong kind) is reported on the error stream as
 
-| Swift | Nim | What it makes |
-| --- | --- | --- |
-| `ferrouiCanvas(parent:)` | `swimFerroUICanvas` | `Canvas`: children at absolute positions |
-| `ferrouiStack(parent:vertical:spacing:)` | `swimFerroUIStack` | `StackPanel` |
-| `ferrouiBox(parent:x:y:width:height:fill:radius:borderColor:borderWidth:)` | `swimFerroUIBox` | `Border` (fill, radius, border) with a `Canvas` for its children |
-| `ferrouiScrollView(parent:x:y:width:height:fill:radius:)` | `swimFerroUIScrollView` | `ScrollViewer` around a `Canvas` |
-| `ferrouiContent(container:)` | `swimFerroUIContent` | the canvas of a box or a scroll view (0 for others) |
+```
+swimferroui: <where>: <what failed>
+```
 
-A control created with `parent:` is added to it: a `Canvas`/`StackPanel` gets
-the control as a child, a `Border`/`ScrollViewer`/`Window`/`Button` as its
-content.
+and the program continues.  The tests fail on any such line.  A missing bridge
+library fails at link time with the library path; a mismatched bridge ABI is
+reported at start-up by the shim and exits with status 1.
 
-### Controls
+## Tests and documentation runs
 
-| Swift | Nim | Control |
-| --- | --- | --- |
-| `ferrouiLabel(parent:x:y:width:height:text:size:color:align:bold:)` | `swimFerroUILabel` | `TextBlock` |
-| `ferrouiButton(parent:x:y:width:height:title:size:bold:fill:titleColor:radius:onTap:)` | `swimFerroUIButton` | `Button` |
-| `ferrouiTextField(parent:x:y:width:height:text:placeholder:size:onChanged:)` | `swimFerroUITextField` | `TextBox` |
-| `ferrouiCheckBox(parent:x:y:width:height:text:checked:onChanged:)` | `swimFerroUICheckBox` | `CheckBox` |
-| `ferrouiSlider(parent:x:y:width:height:minimum:maximum:value:onChanged:)` | `swimFerroUISlider` | `Slider` |
-| `ferrouiProgressBar(parent:x:y:width:height:percent:)` | `swimFerroUIProgressBar` | `ProgressBar` |
+A program reads the environment at run time to drive itself without a person:
 
-### Properties
-
-| Swift | Nim | Sets |
-| --- | --- | --- |
-| `ferrouiSetFrame(handle:x:y:width:height:)` | `swimFerroUISetFrame` | size, and in a canvas the position |
-| `ferrouiSetText(handle:text:)` | `swimFerroUISetText` | text/label/field/title |
-| `ferrouiSetColor(handle:color:)` | `swimFerroUISetColor` | background/fill |
-| `ferrouiSetTextColor(handle:color:)` | `swimFerroUISetTextColor` | foreground |
-| `ferrouiSetBorder(handle:color:width:)` | `swimFerroUISetBorder` | border brush and thickness |
-| `ferrouiSetRadius(handle:radius:)` | `swimFerroUISetRadius` | corner radius |
-| `ferrouiSetFontSize(handle:size:)` | `swimFerroUISetFontSize` | font size |
-| `ferrouiSetBold(handle:bold:)` | `swimFerroUISetBold` | font weight (400/700) |
-| `ferrouiSetAlignment(handle:align:)` | `swimFerroUISetAlignment` | text alignment |
-| `ferrouiSetHidden(handle:hidden:)` | `swimFerroUISetHidden` | visibility |
-| `ferrouiSetOpacity(handle:percent:)` | `swimFerroUISetOpacity` | opacity |
-| `ferrouiSetProgress(handle:percent:)` | `swimFerroUISetProgress` | value of a bar/slider (0…100) |
-| `ferrouiSetValue(handle:value:)` | `swimFerroUISetValue` | value of a slider (0…100) |
-| `ferrouiSetChecked(handle:checked:)` | `swimFerroUISetChecked` | check state |
-| `ferrouiSetSpacing(handle:spacing:)` | `swimFerroUISetSpacing` | stack spacing |
-
-### Events and timers
-
-| Swift | Nim | Event |
-| --- | --- | --- |
-| `ferrouiOnTap(handle:onTap:)` | `swimFerroUIOnTap` | a click of a button, a tap of any other control |
-| `ferrouiOnTextChanged(handle:onChanged:)` | `swimFerroUIOnTextChanged` | a text field changed |
-| `ferrouiOnCheckedChanged(handle:onChanged:)` | `swimFerroUIOnCheckedChanged` | a check box changed |
-| `ferrouiOnValueChanged(handle:onChanged:)` | `swimFerroUIOnValueChanged` | a slider/bar value changed |
-| `ferrouiAfter(ms:action:)` | `swimFerroUIAfter` | runs once, `ms` later, on the UI thread |
-| `ferrouiRaiseClick(handle:)` | `swimFerroUIRaiseClick` | runs the click handlers as a pointer would (test helper) |
-
-Every subscription lives until the application ends.  All callbacks run on the
-UI thread, so they may set properties directly.
-
-### Diagnostics
-
-| Swift | Nim | What it returns |
-| --- | --- | --- |
-| `ferrouiVersion()` | `swimFerroUIVersion` | the bridge and FerroUI version |
-| `ferrouiBridgePath()` | `swimFerroUIBridgePath` | where the bridge library was found |
-| `ferrouiLog(message:)` | `swimFerroUILog` | prints a line to the console |
-| `ferrouiRelease(handle:)` | `swimFerroUIRelease` | drops the reference a handle holds |
-
-## Colours, alignment and handles
-
-- **Colours** are `Int`s: `0xRRGGBB` for an opaque colour, `0xAARRGGBB` for one
-  with alpha.  `-1` (`clearColor` in the view layer) leaves a brush unset, so a
-  panel stays transparent.
-- **Alignment** of text: `alignLeft = 0`, `alignCenter = 1`, `alignRight = 2`.
-- **Handles** are `Int`s; `0` is the null handle.  A handle keeps its control
-  alive; a control of the visual tree is also kept alive by its parent.  A
-  handle of the window stays valid until the application ends.
-
-## Reading properties back
-
-| Swift | Nim | Reads |
-| --- | --- | --- |
-| `ferrouiGetValue(handle:)` | `swimFerroUIGetValue` | the value of a slider/progress bar (`Double`) |
-| `ferrouiGetText(handle:)` | `swimFerroUIGetText` | the text of a label/field or the title of a button |
-| `ferrouiGetChecked(handle:)` | `swimFerroUIGetChecked` | whether a check box is checked |
-| `ferrouiGetVisible(handle:)` | `swimFerroUIGetVisible` | whether a control is visible |
-
-A failed call of the bridge (a property a control does not have, an invalid
-handle) is reported on the error stream as
-`swimferroui: <where>: <what failed>` and the program continues; the tests fail
-on such a line.
-
-## Timers, snapshots and test builds
-
-`ferrouiAfter(ms:action:)` runs a closure once on the UI thread.  For automated
-checks the runtime understands two compile-time defines (pass them with
-`--nim-arg:-d:<name>=<value>`):
-
-| Define | Meaning |
+| Variable | Use |
 | --- | --- |
-| `swimFerroUIImage=<path>` | `ferrouiImagePath()` returns `<path>`; the program writes a PNG of its window there with `ferrouiSnapshot(after:path:)` |
-| `swimFerroUIQuitMs=<ms>` | `ferrouiAutoQuitMs()` returns `<ms>`; `scripts/run-demo.sh --snapshot` passes it so the window closes by itself |
+| `SWIMUI_IMAGE` | `ferrouiImagePath()` returns it; a program writes a PNG of the window there with `ferrouiSnapshot` |
+| `SWIMUI_QUIT_MS` | `ferrouiAutoQuitMs()` returns it; a program closes the window after that time |
+| `SWIMUI_THEME_VARIANT` | the theme variant, read by the bridge at start-up |
 
-`ferrouiSnapshot(after:path:)` renders the window into a PNG off the main
-layout: the window must have been shown (schedule it from `onReady`, not before),
-and the delay lets the layout and the styles settle.  This is what produced
-[`ui/shots/demo.png`](../ui/shots/demo.png) and what
-`tests/binding_test.py` checks.
+That is what produced [`ui/shots/demo.png`](../ui/shots/demo.png) and what
+`tests/binding_test.py` uses.
 
-## The Swift-style view layer (ui/SwimUI.sw)
+## The C shim
 
-`ui/SwimUI.sw` is a Swim module (not part of the compiler) that wraps the flat
-functions in a `View` class and a `Screen` class.  A program imports it with
-`import SwimUI`; it imports `FerroUI` itself.
+`runtime/swimferroui.h` declares one `SwimValue` function per table entry (all
+arguments and results are `SwimValue`, void functions return `SwimVoid()`); the
+compiler emits those calls.  `runtime/swimferroui.c` implements them:
 
-```swift
-import SwimUI
+- it unboxes numbers (`SwimUnboxInt`, `SwimUnboxDouble`, `SwimUnboxBool`), copies
+  string bytes out with a NUL (`SwimStringData`/`SwimStringLen`) and turns
+  colours into `0xAARRGGBB`;
+- it keeps a `() -> Void` closure in a heap cell and passes a C trampoline plus
+  the cell's address to the bridge (`ferro_swim_cb` with an `int64_t user`);
+  the trampoline runs the closure with `SwimCallValue`;
+- it reports what the bridge complains about (`ferro_swim_last_error`), checks
+  the ABI version at start-up, and implements the environment-variable test
+  hooks.
 
-setThemeVariant("dark")
+The shim is compiled into every program that imports the module, so it costs one
+translation unit; the bridge is a shared library built once.
 
-runApp {
-    let screen = Screen(width: 390, height: 844, title: "Library",
-                        background: 0x0B0C10, borderless: true)
-    screen.onReady {
-        let row = screen.panel(x: 24, y: 466, width: 342, height: 66,
-                               color: 0x151824, radius: 16)
-        row.label(x: 68, y: 12, width: 200, height: 20, text: "IMG_0032",
-                  size: 15, bold: true)
-        row.label(x: 68, y: 34, width: 200, height: 18, text: "Today - 2.8 MB",
-                  size: 12, color: 0x8A90A2)
-        row.onTap { printLog("row tapped") }
-    }
-}
-```
+## The Rust bridge
 
-- `Screen(width:height:title:background:borderless:)` — the window; `onReady`
-  runs once it is up (`clientWidth()`/`clientHeight()` give the client area,
-  `snapshot(after:path:)` writes a PNG, `close()` closes the window).
-- `View` factories (all return a `View`): `panel(x:y:width:height:color:radius:
-  borderColor:borderWidth:)`, `scrollView(...)`, `stack(x:y:width:height:
-  vertical:spacing:)`, `label(x:y:width:height:text:size:color:align:bold:)`,
-  `button(x:y:width:height:title:fill:titleColor:radius:size:bold:onTap:)`,
-  `textField(x:y:width:height:text:placeholder:size:onChanged:)`,
-  `checkBox(x:y:width:height:text:checked:onChanged:)`,
-  `slider(x:y:width:height:minimum:maximum:value:onChanged:)`,
-  `progressBar(x:y:width:height:percent:)`.
-- `View` methods: `setText`, `setColor`, `setTextColor`, `setBorder`,
-  `setRadius`, `setFontSize`, `setBold`, `setAlignment`, `setProgress`,
-  `setValue`, `setChecked`, `setSpacing`, `setVisible`, `setOpacity`,
-  `setFrame`, `text()`, `value()`, `isChecked()`, `isVisible()`, `onTap`,
-  `onTextChanged`, `onCheckedChanged`, `onValueChanged`, `raiseTap`.
-- Free functions: `runApp { ... }`, `after(ms) { ... }`, `quitApp()`,
-  `printLog(...)`, `setThemeVariant(...)`, `imagePath()`, `autoQuitMs()`,
-  `swimUIVersion()`.
+`ffi/` is the crate `ferroui-swim`, a `cdylib` with a flat C ABI described in
+`ffi/include/ferroui_swim.h`:
 
-The view layer is deliberately small: it is the shape the nimx demo used, so
-the two GUI demos of the repository are comparable.
+- the application (`AppBuilder` + the simple theme, `ferroui_base`/`ferroui_controls`/
+  `ferroui_desktop`), the main window, the classic desktop lifetime;
+- a handle registry: every live control has an opaque `int64_t` handle; the
+  registry keeps it alive while the handle is not destroyed;
+- typed property setters that cast the handle to the FerroUI class that declares
+  the property (a property the control lacks is an error, not a silent no-op);
+- events (tap/click, text changed, checked changed, value changed, opened,
+  closed) and timers (`DispatcherTimer`), with subscriptions kept alive for the
+  application's lifetime;
+- flex layout (`FlexPanel` + the `Flex` attached properties), tree operations
+  (insert/remove/clear/destroy), panels and toggle switches;
+- snapshots: `RenderTargetBitmap` renders the window into a PNG;
+- `ferro_swim_version`, `ferro_swim_abi_version`, `ferro_swim_last_error`.
 
-## The C ABI of the bridge
+Build it with `scripts/build-ffi.sh`; `FERROUI_DIR` selects the checkout it is
+built against and the cargo target directory defaults to that checkout's, so the
+artifacts of a FerroUI build are reused.  The header documents every function,
+kind and property value.
 
-`ffi/include/ferroui_swim.h` is the contract between the Nim module and the
-Rust crate.  It is flat and free of Rust types:
+## Adding a function
 
-- **Kinds** (`ferro_swim_create`): canvas, stack panel, border, text block,
-  button, text box, check box, slider, progress bar, scroll viewer.
-- **Double properties** (`ferro_swim_set_f64`): width, height, min/max width
-  and height, font size, opacity, corner radius, spacing, minimum, maximum,
-  value, line height.
-- **String properties** (`ferro_swim_set_str`): text, title, watermark,
-  content.
-- **Boolean properties** (`ferro_swim_set_bool`): visible, checked,
-  indeterminate, enabled.
-- **Brush properties** (`ferro_swim_set_color`, `0xAARRGGBB`): background,
-  foreground, border.
-- **Thickness properties** (`ferro_swim_set_thickness`): margin, padding,
-  border thickness.
-- **Enum properties** (`ferro_swim_set_enum`): horizontal/vertical alignment,
-  orientation, text alignment, text wrapping, font weight, font style.
-- **Events** (`ferro_swim_on`): tap, text changed, checked changed, value
-  changed, opened, closed.
-- **Reads** (`ferro_swim_get_f64` / `_str` / `_bool`).
+The four sides, by the example of a new property:
 
-Other functions: `ferro_swim_run`, `ferro_swim_quit`,
-`ferro_swim_set_theme_variant`, `ferro_swim_window`,
-`ferro_swim_client_width`/`_height`, `ferro_swim_set_decorations`,
-`ferro_swim_add_child`, `ferro_swim_set_frame`, `ferro_swim_after`,
-`ferro_swim_snapshot`, `ferro_swim_raise_click`, `ferro_swim_release`,
-`ferro_swim_version`, `ferro_swim_abi_version`, `ferro_swim_last_error`.
-
-The Nim side checks `ferro_swim_abi_version` on the first call and refuses a
-library whose ABI it does not know.
-
-## Adding a control
-
-The four sides of a new control, by the example of a toggle switch:
-
-1. **Rust** — in `ffi/src/controls.rs`, add a kind constant, a constructor in
-   `create()`, and the setters the control needs in `set_f64` / `set_str` /
-   … (cast the handle to the FerroUI class and call its typed setter, so a
-   property the control lacks is a reported error, not a silent no-op).  Add a
-   `ferro_swim_*` export in `ffi/src/lib.rs` only for a new kind of operation.
-2. **Nim** — in `runtime/swimferroui.nim`, add the Swift-facing procedure that
-   composes the C calls (a constructor is usually `newControl` + frame + the
-   property calls), next to the others.
-3. **Compiler** — add the entry to `FERROUI_FUNCS` in `src/swimc/codegen.py`:
-   the Swift name, the Nim procedure, `[(label, kind)]` in positional order and
-   the return kind.  The kinds are `int`, `double`, `string`, `bool` and
-   `closure`.
-4. **View layer** — add the factory/method in `ui/SwimUI.sw`.
-5. **Tests** — add the control to `tests/binding/BindingTest.sw` (create it,
-   change a property, read it back) and, if it has an event, raise it.
-
-`make test-binding` then checks the whole chain.
+1. **Rust** — if the operation is new (not a property through the existing
+   setters), add a `ferro_swim_*` export in `ffi/src/lib.rs` and implement it in
+   `ffi/src/controls.rs`, `events.rs`, `app.rs` or `snapshot.rs`; update
+   `ffi/include/ferroui_swim.h` (the ABI version stays 1 for additions that the
+   shim checks).
+2. **C shim** — declare `swimferroui_<name>` in `runtime/swimferroui.h` and
+   implement it in `runtime/swimferroui.c`: convert the `SwimValue`s, call the
+   bridge, return `SwimValue`; use `swimferroui_report` after the call.
+3. **Compiler** — add the entry to `src/swimc/native_ferroui.py`'s
+   `FERROUI_FUNCS`: Swift name, C function, labels and kinds, result kind.  The
+   checker and the code generator pick it up automatically.
+4. **Tests** — add the call to `tests/binding/NativeTest.sw` (and the expected
+   line to `tests/binding_test.py`), or to the SwiftUI layer test if the layer
+   uses it.
 
 ## Limitations
 
-- One window per program, created inside the `ferrouiRun` block.
-- The binding exposes a curated set of controls (the ones above).  FerroUI has
-  many more — grids, lists, menus, pickers, charts — and each one needs the
-  four steps above.
-- Layout: a canvas with absolute positions, plus stack panels.  FerroUI's
-  `Grid`, alignments and margins are available through the ABI's enum and
-  thickness properties but are not surfaced by the view layer.
-- No data binding, no styles/selectors from the program, no XAML, no
-  animations or transitions, no dialogs, no clipboard/drag-and-drop.
-- Custom drawing (a `Canvas`-painted scene) is not exposed; a control's
-  appearance comes from its theme.
-- The bridge is debug-built by default (fast to iterate, large and slower than
-  a release build).  `scripts/build-ffi.sh --release` builds the optimised one.
-- Interactions are real FerroUI input events; the automated test drives events
-  by raising a click, not by synthesising pointer input.
+- one window per program, created inside `ferrouiRun`;
+- a curated set of controls: no `Grid`, `ItemsControl`/`ListBox`, menus,
+  pickers, charts, dialogs, media;
+- no data binding, styles/selectors from the program, XAML, animations or
+  transitions;
+- no custom drawing: a control's look comes from its theme (the simple theme by
+  default; the bridge adds it, and the variant is dark/light/system);
+- all calls and callbacks run on the UI thread (the thread that called
+  `ferrouiRun`); there is no thread-safe handle API;
+- the bridge is debug-built by default (fast to iterate, large); build it with
+  `scripts/build-ffi.sh --release` for an optimised one.

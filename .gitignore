@@ -4,8 +4,8 @@ __pycache__/
 
 # Swim build artifacts
 .Swim-cache/
-examples/*.nim
-examples/programs/*.nim
+examples/*.c
+examples/programs/*.c
 
 # compiled programs and binaries
 *.out

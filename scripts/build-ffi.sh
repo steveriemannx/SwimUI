@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Build the Rust bridge that the `FerroUI` native module of Swim calls.
 #
-# The generated Nim of a `.sw` program that writes `import FerroUI` loads the
-# bridge as a shared library from `build/` (see runtime/swimferroui.nim); this
-# script builds it from `ffi/` and puts it there.
+# Swim compiles a `.sw` program to C; a program that writes `import FerroUI`
+# also compiles the C shim `runtime/swimferroui.c` into itself and links the
+# shared library this script builds from `ffi/`.  The shim (C) calls the flat
+# C ABI of the bridge (`ffi/include/ferroui_swim.h`), which hosts the FerroUI
+# application and its controls.
 #
 #   scripts/build-ffi.sh              build the bridge (debug, fast to iterate)
 #   scripts/build-ffi.sh --release    optimised build (slow the first time)
@@ -17,7 +19,7 @@
 #   CARGO_INCREMENTAL  cargo incremental compilation (default: 0)
 #
 # A FerroUI checkout is a Rust workspace of about a hundred crates whose debug
-# build takes some 20 GB; pointing the target directory at the checkout of
+# build takes tens of GB; pointing the target directory at the checkout of
 # FerroUI reuses the artifacts it already built, and the first build of the
 # bridge then takes minutes instead of an hour.
 set -euo pipefail
@@ -32,7 +34,7 @@ for arg in "$@"; do
   case "$arg" in
     --release) RELEASE=1 ;;
     -h|--help)
-      sed -n '2,26p' "$0"; exit 0 ;;
+      sed -n '2,27p' "$0"; exit 0 ;;
     *)
       echo "build-ffi.sh: unknown option: $arg" >&2; exit 2 ;;
   esac

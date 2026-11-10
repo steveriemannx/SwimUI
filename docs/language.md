@@ -1,8 +1,9 @@
 # The Swim language reference
 
 This document describes the complete syntax and semantics of Swim.
-Swim = **Swift syntax** + **Nim execution**. Files use the `.sw` extension and
-each file is a complete program.
+Swim = **Swift syntax** compiled **directly to C**. Files use the `.sw`
+extension and each file is a complete program. Programs are built with the
+system C compiler and linked with the atomic-ARC C runtime.
 
 ## Table of contents
 
@@ -131,23 +132,23 @@ Unicode math/symbol operators such as `≤`, `×` and `√`.
 
 ### Primitive types
 
-| Swim | Nim | notes |
+| Swim | runtime representation | notes |
 | --- | --- | --- |
-| `Int`, `Int8`, `Int16`, `Int32`, `Int64` | `int`, `int8`, … | signed |
-| `UInt`, `UInt8`, … | `uint`, … | unsigned |
-| `Double`, `Float` | `float`, `float32` | |
-| `Bool` | `bool` | `true` / `false` |
-| `String` | `string` | UTF-8 |
-| `Character` | `char` | single character |
+| `Int`, `Int8`, `Int16`, `Int32`, `Int64` | boxed integer (`SwimInt`) | signed |
+| `UInt`, `UInt8`, … | boxed integer | unsigned |
+| `Double`, `Float` | boxed `double` | |
+| `Bool` | boxed `bool` | `true` / `false` |
+| `String` | refcounted byte string | UTF-8 |
+| `Character` | boxed byte (`char`) | single character |
 | `Void` | — | no return value |
 
 ### Composite types
 
 ```swift
-let a: [Int] = [1, 2, 3]              // seq[int]
-let b: [String: Int] = ["a": 1]       // Table[string, int]
-let c: Set<Int> = [1, 2]              // HashSet[int]
-let d: (Int, String) = (1, "a")       // (int, string)
+let a: [Int] = [1, 2, 3]              // refcounted array
+let b: [String: Int] = ["a": 1]       // insertion-ordered hash table
+let c: Set<Int> = [1, 2]              // refcounted hash set
+let d: (Int, String) = (1, "a")       // refcounted tuple
 let e: (x: Int, y: Int) = (x: 1, y: 2)
 let f: Int? = nil                     // Option[int]
 let g: (Int) -> String = { "\($0)" }  // closure type
@@ -299,7 +300,7 @@ Nested types are declared inside `struct`/`class`/`enum`/`protocol` bodies,
 referenced as `Outer.Inner`, and can be extended with
 `extension Outer.Inner { ... }`. Inside the enclosing type the short name
 (`Inner`, `State`) works; a nested type can also refer back to its enclosing
-class. All type declarations are emitted into one Nim `type` section, so type
+class. The C backend emits type descriptors with forward declarations, so type
 declaration order does not matter.
 
 ### Structs
@@ -417,7 +418,7 @@ class Animal {
     var name: String
     init(name: String) { self.name = name }
     func speak() -> String { "..." }
-    deinit { }                      // accepted and ignored
+    deinit { print("bye", name) }   // runs when the last reference goes away
 }
 
 class Dog: Animal {
@@ -431,7 +432,8 @@ class Dog: Animal {
 ```
 
 - `class` is a **reference type**: assigning shares the same instance.
-- Single inheritance; `override` methods dispatch dynamically through Nim
+- Single inheritance; `override` methods dispatch dynamically through the
+  runtime
   `method`.
 - `super.init(...)` and `super.method(...)` work.
 - `as?` / `as!` downcast; `is` tests the runtime type.
@@ -540,8 +542,8 @@ func describe<T: Shape>(_ shape: T) -> String {
 }
 ```
 
-Protocols compile to Nim **concepts** and are checked structurally in generic
-constraints. A protocol name can also be used directly as a function parameter
+Protocols are checked structurally at compile time and constrain generic
+parameters. A protocol name can also be used directly as a function parameter
 type (statically dispatched).
 
 ### Extensions
@@ -616,15 +618,10 @@ import Greeter
 - Only the entry file may declare `@main`.
 - `Swim deps main.sw` shows the resolved import graph and execution order.
 
-**3) Nim ecosystem libraries (native modules)**: `.sw` files may not contain
-Nim code (`import std/...`, pragmas, `importcpp`, ...), so Nim libraries cannot
-be imported directly.  A bundled Nim wrapper in `runtime/` can be exposed as a
-**native module** instead: `import Nimx` (the nimx GUI toolkit) is built in.
-The Nim side exports a flat API of `Int` handles, plain values and
-`proc()` callbacks, and the compiler maps Swift-style calls onto it.  See
-[`projects-main/`](../projects-main/) for a phone-sized GUI example.  This
-keeps every source file pure Swift syntax while Nim lives in the invisible
-backend.
+**3) Native modules (retired)**: the Nim backend used to wrap Nim libraries
+as *native modules* (`import Nimx`). The direct C backend does not support
+that mechanism; `import Nimx` is rejected. Extend the C runtime
+(`runtime/swimrt*.c`) and the builtin dispatch instead.
 
 ## 4. Statements
 
@@ -788,10 +785,10 @@ condition is false the error is rethrown).
 
 ### Integers and floats
 
-- Integer `/` generates `div` (truncating toward zero); `%` generates `mod`.
+- Integer `/` truncates toward zero (C semantics); `%` is the C remainder.
 - Float `/` is normal division; literal integers are promoted when mixed with
   floats.
-- Overflow behavior is handled by Nim's runtime checks.
+- Integer overflow follows C semantics (no traps).
 
 ### Ternary and nil-coalescing
 
@@ -942,9 +939,10 @@ if let data = try? fetch(url) { ... }
 let data = try! fetch(url)
 ```
 
-- `enum E: Error` compiles to an exception type hierarchy (one
-  `CatchableError` subtype per case).
-- Errors propagate across functions; Nim `Defect`s are not caught by `catch`.
+- `enum E: Error` and `struct E: Error` values are thrown through the
+  runtime's exception frames and matched by `catch` patterns.
+- Errors propagate across functions and are not caught by unrelated `catch`
+  clauses.
 - `defer` also runs when an error propagates.
 
 ## 10. Protocols and generics
@@ -981,7 +979,7 @@ enum Result<Value> {
 let result = Result<Int>.success(42)
 ```
 
-- Generic types/functions are zero-cost (Nim monomorphization).
+- Generic types/functions are type-erased; dispatch happens at run time.
 - `where T: Protocol` clauses (on functions, types and extensions) are folded
   into the generic parameter's protocol constraints. Same-type constraints
   (`where T == Int`) are parsed but not enforced.
@@ -1017,8 +1015,7 @@ extension Stack {
 
 ## 12. Runtime standard library
 
-Every program automatically imports `swimrt` (`runtime/swimrt.nim`), which
-provides:
+Every program links `runtime/swimrt*.c`, which provides:
 
 ### Printing
 
@@ -1094,17 +1091,21 @@ struct App {
 
 Swim uses **ARC (Automatic Reference Counting)**:
 
-- The compiler always invokes Nim with `--mm:arc`; no tracing GC or cycle
-  collector is enabled.
-- `struct` and `enum` are value types (Nim `object`), copied by value, with no
-  reference counting.
-- `class` is a reference type (Nim `ref object`); ARC releases instances
-  immediately when the reference count reaches zero.
+- Heap objects carry an `_Atomic int64_t` reference count updated with C11
+  atomics (Swift-style atomic ARC); no tracing GC or cycle collector exists.
+- `struct`, `enum`, `String`, arrays, dictionaries, sets, tuples and optionals
+  are value types: they are copied on store.
+- `class` is a reference type; ARC releases instances immediately when the
+  reference count reaches zero.
 - As with Swift ARC, **reference cycles are not collected automatically**. If
   two classes hold strong references to each other, break the cycle manually
   (set one side to `nil`).
-- `weak` / `unowned` modifiers are not supported (compile error); avoid
-  reference cycles instead.
+- `weak var` (optional class property) and `unowned var` (class property)
+  break reference cycles: weak references are zeroed when the target is
+  deallocated, unowned references trap if used after the target is released.
+- Classes can declare `deinit`, which runs when the last strong reference is
+  released; derived deinitializers run before superclass ones and weak
+  references are zeroed first. Stored members are released after `deinit`.
 - Recursive enums are represented with references, so they are also managed by
   ARC; large recursive values can still form cycles.
 - References captured by closures are ARC-managed.
@@ -1116,7 +1117,7 @@ root).
 
 This is an independent implementation: **no code from the official Swift
 repository (swiftlang/swift) or the Swift standard library is used**. The
-compiler (Python), runtime (Nim), tests and documentation are all original.
+compiler (Python), C runtime, tests and documentation are all original.
 The syntax design follows Swift's language conventions (keywords, precedence,
 optional semantics, etc.), but no files were copied from the Swift repository.
 
@@ -1129,15 +1130,17 @@ a few are only ignored):
   variable type.
 - `async`/`await` (keywords are ignored; code is compiled synchronously).
 - Custom assignment operators.
-- Property wrappers, `lazy`, `weak`/`unowned`, `deinit`, attribute semantics
-  beyond `@escaping`.
+- Property wrappers, `lazy`, attribute semantics beyond `@escaping`.
+- `weak`/`unowned` on locals, globals, static properties or with observers;
+  weak properties must be optional class types, and `deinit` is only allowed
+  in classes.
 - `willSet`/`didSet` on `static` properties and in extensions (stored
   properties cannot be added by extensions).
 - Foundation / Cocoa / SwiftUI library APIs (`import Foundation` is only
   accepted).
 - Multi-file modules are supported, but there is no package manager and
   dependencies are not downloaded.
-- Direct imports of Nim ecosystem libraries (only Swift syntax is allowed in
+- Direct imports of foreign libraries (only Swift syntax is allowed in
   `.sw` files; see the extension paths above).
 - `Any` type erasure, C interop, macros.
 - Heterogeneous protocol arrays (`[any Shape]`) and dynamic dispatch through
@@ -1150,4 +1153,4 @@ initializer delegation via `self.init`, custom operators, nested types and
 `#if`/`#available` conditional compilation.
 
 If you need these capabilities, extend the Swim compiler/runtime instead of
-mixing in Nim — Swim source files accept Swift syntax only.
+mixing in another language — Swim source files accept Swift syntax only.

@@ -1,5 +1,5 @@
 // Nested type declarations: structs, classes, enums, typealiases,
-// extensions, static members and mutual references via the Nim type block.
+// extensions, static members and mutual references via the C type metadata.
 struct Outer {
     typealias ID = Int
 

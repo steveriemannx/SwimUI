@@ -9,12 +9,13 @@ Swim supports two kinds of ``import`` statements:
    accepted as a no-op -- the Swim runtime already provides the corresponding
    Swift-style API.  These names exist for source compatibility with Swift.
 
-   **Native modules** (``Nimx``, ``Zeta``, ``FerroUI``) are built-in names
-   whose implementation is a separate Nim module in ``runtime/``
-   (``runtime/swimnimx.nim``, ``runtime/swimzeta.nim``,
-   ``runtime/swimferroui.nim``).  Importing one makes the generated Nim import
-   that module, which is how a Nim (or, for ``FerroUI``, a Rust) library is
-   exposed to Swim without any Nim code in ``.sw`` sources.
+   **Native modules** are built-in names whose implementation is C source in
+   ``runtime/``: ``FerroUI`` (the GUI binding of SwimUI) is the one the direct
+   C backend supports.  Importing a native module makes the compiler include
+   its header and compile its C shim into the program
+   (``runtime/swimferroui.c``), so a C library is exposed to Swim without any
+   foreign code in ``.sw`` sources.  The Nim-era modules (``Nimx``, ``Zeta``)
+   are retired.
 
 2. **Swim modules**: ``import Foo`` (or ``import Foo.Bar``) resolves to a
    ``.sw`` file:
@@ -62,18 +63,23 @@ BUILTIN_MODULES = {
     "Time",
 }
 
-# "Native" modules: built-in module names whose implementation is a separate
-# Nim module shipped in runtime/ (not squashed into swimrt).  Importing one
-# makes the generator emit `import <nim module>` in the generated Nim, so the
-# module can wrap a native library behind Swift-syntax-only declarations: the
-# nimx GUI toolkit for `Nimx`, the Zeta kernel for `Zeta` and the FerroUI
-# control library for `FerroUI`.  See docs/internals.md "Add a built-in
-# module".
+# "Native" modules: built-in module names whose implementation is C source in
+# runtime/ plus, for FerroUI, a shared library built from ffi/.  Importing one
+# makes the generated C include the module's header, call its C shim and link
+# its library; the Swift-facing functions are declared in
+# `swimc/native_ferroui.py`.  See docs/internals.md "Add a native module".
 NATIVE_MODULES = {
-    "Nimx": "swimnimx",
-    "Zeta": "swimzeta",
-    "FerroUI": "swimferroui",
+    "FerroUI": {"shim": "swimferroui", "library": "ferroui_swim"},
 }
+
+# Native modules of the retired Nim backend.  Importing one is a compile error
+# that explains what happened.
+RETIRED_NATIVE_MODULES = {"Nimx", "Zeta"}
+
+def native_module_names() -> set[str]:
+    """The names of the native modules the compiler can bind."""
+    return set(NATIVE_MODULES)
+
 
 MODULE_HELP = (
     "imports resolve to '<Name>.sw' or '<Name>/main.sw'; search order is the "
@@ -99,7 +105,7 @@ class Project:
     line_owner: list = field(default_factory=list)  # composed line -> (path, local)
     sources: dict = field(default_factory=dict)  # path -> source text
     imports: dict = field(default_factory=dict)  # path -> [(name, target|None, builtin)]
-    native_modules: list = field(default_factory=list)  # e.g. ["Nimx"]
+    native_modules: list = field(default_factory=list)  # e.g. ["FerroUI"]
 
     def path_at_line(self, composed_line: int) -> tuple[Path, int] | None:
         idx = composed_line - 1
@@ -210,8 +216,15 @@ class _Loader:
                 continue
             name = decl.path
             target = self.resolve_module(name, real)
+            if target is None and name in RETIRED_NATIVE_MODULES:
+                raise SwimError(
+                    f"native module '{name}' is not supported by the direct C "
+                    "backend (native modules were retired together with the "
+                    "Nim backend)",
+                    filename=str(real), line=decl.line, col=decl.col,
+                )
             if target is None and name in NATIVE_MODULES:
-                entries.append((name, None, False))
+                entries.append((name, None, True))
                 continue
             if target is None and name in BUILTIN_MODULES:
                 entries.append((name, None, True))
@@ -316,8 +329,8 @@ class _Loader:
                           filename=str(self.entry), line=1, col=1)
         native = []
         for entries in self.import_map.values():
-            for name, _target, builtin in entries:
-                if not builtin and name in NATIVE_MODULES and name not in native:
+            for name, _target, _builtin in entries:
+                if name in NATIVE_MODULES and name not in native:
                     native.append(name)
         composed = "\n".join(parts)
         return Project(entry=self.entry, files=self.order, module=module,

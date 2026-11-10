@@ -173,6 +173,58 @@ pub extern "C" fn ferro_swim_add_child(parent: i64, child: i64) {
     report(controls::add_child(parent, child));
 }
 
+/// Inserts a control into a panel at `index`, replaces the child of a border
+/// (index 0) or the content of a content control.
+#[no_mangle]
+pub extern "C" fn ferro_swim_insert_child(parent: i64, index: i32, child: i64) {
+    report(controls::insert_child(parent, index, child));
+}
+
+/// Removes a control from a panel, or clears the child of a border or the
+/// content of a content control.
+#[no_mangle]
+pub extern "C" fn ferro_swim_remove_child(parent: i64, child: i64) {
+    report(controls::remove_child(parent, child));
+}
+
+/// Removes every child of a panel, or clears the single child of a border or
+/// content control.
+#[no_mangle]
+pub extern "C" fn ferro_swim_clear_children(parent: i64) {
+    report(controls::clear_children(parent));
+}
+
+/// Destroys the control a handle refers to once no other reference holds it:
+/// the handle stops being valid for the calls that take a handle of that
+/// control, and the control itself goes away with the last reference (the
+/// visual tree, or another handle).  Destroying a handle that is already gone
+/// is a no-op.
+#[no_mangle]
+pub extern "C" fn ferro_swim_destroy(handle: i64) {
+    state::release(handle);
+    state::clear_error();
+}
+
+/// Sets the direction, the two alignments and the two spacings of a flex panel.
+#[no_mangle]
+pub extern "C" fn ferro_swim_set_flex(
+    handle: i64,
+    direction: i32,
+    justify: i32,
+    align: i32,
+    column_spacing: f64,
+    row_spacing: f64,
+) {
+    report(controls::set_flex(handle, direction, justify, align, column_spacing, row_spacing));
+}
+
+/// Sets the flex grow factor of a control: how it shares the free space of the
+/// flex panel it is a child of.
+#[no_mangle]
+pub extern "C" fn ferro_swim_set_grow(handle: i64, grow: f64) {
+    report(controls::set_grow(handle, grow));
+}
+
 /// Sets the size and, in a canvas, the position of a control.
 #[no_mangle]
 pub extern "C" fn ferro_swim_set_frame(handle: i64, x: f64, y: f64, width: f64, height: f64) {
@@ -195,6 +247,11 @@ pub extern "C" fn ferro_swim_set_str(handle: i64, property: i32, value: *const c
 #[no_mangle]
 pub extern "C" fn ferro_swim_set_bool(handle: i64, property: i32, value: c_int) {
     report(controls::set_bool(handle, property, value != 0));
+}
+
+#[no_mangle]
+pub extern "C" fn ferro_swim_set_i32(handle: i64, property: i32, value: i32) {
+    report(controls::set_i32(handle, property, value));
 }
 
 #[no_mangle]

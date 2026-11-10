@@ -1,20 +1,21 @@
-# Swim + nimx: phone-sized GUI demo
+# Swim + nimx GUI demo (archived)
 
-A complete GUI application written in **Swim** (Swift syntax, Nim backend) and
-drawn with **[nimx](https://github.com/yglukhov/nimx)**.  The canvas is
-**390 × 844 points** — an iPhone-sized screen, rendered 2× on Retina displays
-(the screenshot below is 780 × 1688 px).
+The original GUI demo, written in **Swim** and drawn with
+**[nimx](https://github.com/yglukhov/nimx)**. It was built by the retired
+**Nim backend**; the current direct C backend does not support native modules,
+so this demo **does not build anymore**. It is kept for historical reference
+(UI layout and Swift-style wrapper), not as a working example.
 
 ![PhoneDemo screenshot](shots/phone.png)
 
 ```
 PhoneDemo.sw     the demo app (window, layout, widgets, callbacks)
-NimxUI.sw        Swift-style `View` wrapper over the Nimx bridge
-run.sh           build & run (atomic ARC by default)
-fetch-deps.sh    fetch nimx and the Nim packages it needs into .deps/
+NimxUI.sw        Swift-style `View` wrapper over the retired Nimx bridge
+shots/           screenshots
 ```
 
-## Quick start
+The `run.sh` / `fetch-deps.sh` Nim build scripts and the vendored Nim
+dependency cache were removed together with the Nim backend.
 
 ```console
 $ ./fetch-deps.sh                                  # clones nimx deps into .deps/

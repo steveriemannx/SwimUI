@@ -7,14 +7,15 @@
 
 use std::rc::Rc;
 
-use ferroui_base::layout::{HorizontalAlignment, Orientation, VerticalAlignment};
+use ferroui_base::layout::{HorizontalAlignment, Layoutable, Orientation, VerticalAlignment};
 use ferroui_base::media::{FontStyle, FontWeight, IBrush, TextAlignment, TextWrapping};
 use ferroui_base::interactivity::RoutedEventArgs;
 use ferroui_base::{CornerRadius, FerroObject, Ref, Size, Thickness};
 use ferroui_controls::primitives::{RangeBase, TemplatedControl, ToggleButton};
 use ferroui_controls::{
-    Border, Button, Canvas, CheckBox, ContentControl, Control, Decorator, Panel, ProgressBar, ScrollViewer, Slider,
-    StackPanel, TextBlock, TextBox, Window,
+    Border, Button, Canvas, CheckBox, ContentControl, Control, Decorator, Flex, FlexAlignItems, FlexDirection,
+    FlexJustifyContent, FlexPanel, Panel, ProgressBar, ScrollViewer, Slider, StackPanel, TextBlock, TextBox,
+    ToggleSwitch, Window,
 };
 
 use crate::state::{self, Handle};
@@ -30,6 +31,9 @@ pub const KIND_CHECK_BOX: i32 = 7;
 pub const KIND_SLIDER: i32 = 8;
 pub const KIND_PROGRESS_BAR: i32 = 9;
 pub const KIND_SCROLL_VIEWER: i32 = 10;
+pub const KIND_PANEL: i32 = 11;
+pub const KIND_FLEX_PANEL: i32 = 12;
+pub const KIND_TOGGLE_SWITCH: i32 = 13;
 
 // The double properties.
 pub const F64_WIDTH: i32 = 1;
@@ -58,6 +62,10 @@ pub const BOOL_IS_VISIBLE: i32 = 1;
 pub const BOOL_IS_CHECKED: i32 = 2;
 pub const BOOL_IS_INDETERMINATE: i32 = 3;
 pub const BOOL_IS_ENABLED: i32 = 4;
+pub const BOOL_CLIP_TO_BOUNDS: i32 = 5;
+
+// The integer properties.
+pub const I32_MAX_LINES: i32 = 1;
 
 // The brush properties.
 pub const COLOR_BACKGROUND: i32 = 1;
@@ -96,6 +104,11 @@ pub fn create(kind: i32) -> Result<Ref<Control>, String> {
         KIND_SLIDER => Slider::new().upcast::<Control>(),
         KIND_PROGRESS_BAR => ProgressBar::new().upcast::<Control>(),
         KIND_SCROLL_VIEWER => ScrollViewer::new().upcast::<Control>(),
+        // A panel arranges its children on top of each other: the overlay of a
+        // ZStack.
+        KIND_PANEL => Panel::new().upcast::<Control>(),
+        KIND_FLEX_PANEL => FlexPanel::new().upcast::<Control>(),
+        KIND_TOGGLE_SWITCH => ToggleSwitch::new().upcast::<Control>(),
         other => return Err(format!("unknown control kind {other}")),
     };
     Ok(control)
@@ -153,6 +166,159 @@ pub fn add_child(parent: Handle, child: Handle) -> Result<(), String> {
         return Ok(());
     }
     Err(format!("{} cannot hold a child", name_of(&parent_control)))
+}
+
+/// Inserts `child` into `parent` at `index`.
+///
+/// A panel keeps an ordered list of children, so the index is where the child
+/// lands (an index past the end appends it); a decorator holds one child, so
+/// the index has to be 0; a content control holds one boxed content, which the
+/// child replaces.
+pub fn insert_child(parent: Handle, index: i32, child: Handle) -> Result<(), String> {
+    if parent == 0 {
+        return Ok(());
+    }
+    let parent_control = state::control(parent).ok_or_else(|| format!("invalid parent handle {parent}"))?;
+    let child_control = state::control(child).ok_or_else(|| format!("invalid child handle {child}"))?;
+    if index < 0 {
+        return Err(format!("the index of a child must not be negative, not {index}"));
+    }
+    let index = index as usize;
+
+    if let Some(panel) = parent_control.cast::<Panel>() {
+        let children = panel.children();
+        // `FerroList::insert` needs a slot that exists: an index past the end
+        // appends the child, as the collection's `add` would.
+        let index = index.min(children.count());
+        children.insert(index, child_control);
+        return Ok(());
+    }
+    if let Some(decorator) = parent_control.cast::<Decorator>() {
+        if index != 0 {
+            return Err(format!(
+                "{} holds a single child, so the index must be 0, not {index}",
+                name_of(&parent_control)
+            ));
+        }
+        decorator.set_child(child_control);
+        return Ok(());
+    }
+    if let Some(content) = parent_control.cast::<ContentControl>() {
+        // A content control holds a single boxed value: an index cannot place
+        // a second child, so it is ignored.
+        content.set_content(Some(Control::boxed(&child_control)));
+        return Ok(());
+    }
+    Err(format!("{} cannot hold a child", name_of(&parent_control)))
+}
+
+/// Removes `child` from `parent`; a child that is not in `parent` is a no-op
+/// for a panel, and clears the single child of a decorator, or the content of
+/// a content control.
+pub fn remove_child(parent: Handle, child: Handle) -> Result<(), String> {
+    if parent == 0 {
+        return Ok(());
+    }
+    let parent_control = state::control(parent).ok_or_else(|| format!("invalid parent handle {parent}"))?;
+    let child_control = state::control(child).ok_or_else(|| format!("invalid child handle {child}"))?;
+
+    if let Some(panel) = parent_control.cast::<Panel>() {
+        panel.children().remove(child_control);
+        return Ok(());
+    }
+    if let Some(decorator) = parent_control.cast::<Decorator>() {
+        decorator.set_child(None::<Ref<Control>>);
+        return Ok(());
+    }
+    if let Some(content) = parent_control.cast::<ContentControl>() {
+        content.set_content(None);
+        return Ok(());
+    }
+    Err(format!("{} cannot hold a child", name_of(&parent_control)))
+}
+
+/// Removes every child of `parent`.
+pub fn clear_children(parent: Handle) -> Result<(), String> {
+    if parent == 0 {
+        return Ok(());
+    }
+    let parent_control = state::control(parent).ok_or_else(|| format!("invalid parent handle {parent}"))?;
+
+    if let Some(panel) = parent_control.cast::<Panel>() {
+        let children = panel.children();
+        // The snapshot is taken first: removing mutates the collection the
+        // snapshot was taken from.
+        for child in children.snapshot().iter() {
+            children.remove(child);
+        }
+        return Ok(());
+    }
+    if let Some(decorator) = parent_control.cast::<Decorator>() {
+        decorator.set_child(None::<Ref<Control>>);
+        return Ok(());
+    }
+    if let Some(content) = parent_control.cast::<ContentControl>() {
+        content.set_content(None);
+        return Ok(());
+    }
+    Err(format!("{} cannot hold a child", name_of(&parent_control)))
+}
+
+/// The direction, the two alignments and the two spacings of a flex panel.
+pub fn set_flex(
+    handle: Handle,
+    direction: i32,
+    justify: i32,
+    align: i32,
+    column_spacing: f64,
+    row_spacing: f64,
+) -> Result<(), String> {
+    let control = state::control(handle).ok_or_else(|| format!("invalid handle {handle}"))?;
+    let panel = control
+        .cast::<FlexPanel>()
+        .ok_or_else(|| format!("{} is not a flex panel", name_of(&control)))?;
+    // The values are checked before any of them is set, so a call with an
+    // unknown value leaves the panel as it was.
+    let direction = match direction {
+        0 => FlexDirection::Row,
+        1 => FlexDirection::RowReverse,
+        2 => FlexDirection::Column,
+        3 => FlexDirection::ColumnReverse,
+        other => return Err(format!("unknown flex direction {other}")),
+    };
+    let justify = match justify {
+        0 => FlexJustifyContent::FlexStart,
+        1 => FlexJustifyContent::FlexEnd,
+        2 => FlexJustifyContent::Center,
+        3 => FlexJustifyContent::SpaceBetween,
+        4 => FlexJustifyContent::SpaceAround,
+        5 => FlexJustifyContent::SpaceEvenly,
+        other => return Err(format!("unknown flex justify content {other}")),
+    };
+    let align = match align {
+        0 => FlexAlignItems::FlexStart,
+        1 => FlexAlignItems::FlexEnd,
+        2 => FlexAlignItems::Center,
+        3 => FlexAlignItems::Stretch,
+        other => return Err(format!("unknown flex align items {other}")),
+    };
+    panel.set_direction(direction);
+    panel.set_justify_content(justify);
+    panel.set_align_items(align);
+    panel.set_column_spacing(column_spacing);
+    panel.set_row_spacing(row_spacing);
+    Ok(())
+}
+
+/// Sets the factor by which a control grows along the main axis of the flex
+/// panel it is a child of; 0 keeps its size, 1 and more share the free space.
+pub fn set_grow(handle: Handle, grow: f64) -> Result<(), String> {
+    let control = state::control(handle).ok_or_else(|| format!("invalid handle {handle}"))?;
+    let layoutable = control
+        .cast::<Layoutable>()
+        .ok_or_else(|| format!("{} is not laid out", name_of(&control)))?;
+    Flex::set_grow(&layoutable, grow);
+    Ok(())
 }
 
 /// Sets the size and, for a child of a canvas, the position of a control.
@@ -280,7 +446,23 @@ pub fn set_bool(handle: Handle, property: i32, value: bool) -> Result<(), String
             progress.set_is_indeterminate(value);
         }
         BOOL_IS_ENABLED => control.set_is_enabled(value),
+        BOOL_CLIP_TO_BOUNDS => control.set_clip_to_bounds(value),
         other => return Err(format!("unknown boolean property {other}")),
+    }
+    Ok(())
+}
+
+/// Sets an integer property of a control.
+pub fn set_i32(handle: Handle, property: i32, value: i32) -> Result<(), String> {
+    let control = state::control(handle).ok_or_else(|| format!("invalid handle {handle}"))?;
+    match property {
+        I32_MAX_LINES => {
+            let text = control
+                .cast::<TextBlock>()
+                .ok_or_else(|| format!("{} has no maximum number of lines", name_of(&control)))?;
+            text.set_max_lines(value);
+        }
+        other => return Err(format!("unknown integer property {other}")),
     }
     Ok(())
 }

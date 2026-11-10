@@ -14,18 +14,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import __version__
-from .codegen import generate
+from .checker import check as check_program
+from .codegen_c import generate as generate_c
 from .errors import SwimError
 from .modules import load_project
+from . import native_ferroui as ferro
 from .types import build_registry
 
 
-# Swim targets Nim's ARC memory management (automatic reference counting).
-# `atomicArc` is like Swift's ARC: reference counts are updated atomically, so
-# objects can be shared between threads.  It is opt-in because plain `arc` is
-# cheaper for single-threaded programs.
-DEFAULT_MEMORY_MANAGEMENT = "arc"
-MEMORY_MANAGEMENT_CHOICES = ("arc", "atomicArc", "orc", "refc")
+# The direct C backend always uses Swift-style atomically refcounted ARC.
+DEFAULT_MEMORY_MANAGEMENT = "atomicArc"
+MEMORY_MANAGEMENT_CHOICES = ("atomicArc",)
 
 NIM_ERROR_RE = re.compile(r"^(?P<file>.*?)\((?P<line>\d+),\s*(?P<col>\d+)\)\s+"
                           r"(?P<kind>Error|Warning|Hint):\s*(?P<msg>.*)$")
@@ -42,19 +41,53 @@ def runtime_dir() -> Path:
     return package_root() / "runtime"
 
 
-def nim_executable() -> str:
-    env = os.environ.get("SWIM_NIM")
+def cc_executable() -> str:
+    env = os.environ.get("SWIM_CC")
     if env:
         return env
-    found = shutil.which("nim")
-    if found:
-        return found
-    for candidate in (Path.home() / ".nimble" / "bin" / "nim",
-                      Path.home() / ".choosenim" / "toolchains"):
-        if candidate.is_file():
-            return str(candidate)
-    raise SwimError("could not find the Nim compiler; install Nim or set "
-                    "SWIM_NIM")
+    for candidate in ("cc", "clang", "gcc"):
+        found = shutil.which(candidate)
+        if found:
+            return found
+    raise SwimError("could not find a C compiler; install clang or gcc")
+
+
+def runtime_sources() -> list[Path]:
+    rt = runtime_dir()
+    return sorted(rt.glob("swimrt_*.c")) + [rt / "swimrt_core.c"] * 0
+
+
+def runtime_source_files() -> list[Path]:
+    rt = runtime_dir()
+    out = [rt / "swimrt_core.c", rt / "swimrt_collections.c",
+           rt / "swimrt_call.c", rt / "swimrt_builtin.c", rt / "swimrt_error.c"]
+    return [p for p in out if p.exists()]
+
+
+class NativeLink:
+    """What a program with native modules needs: extra sources, includes and
+    libraries, and the files its cache key must cover."""
+
+    def __init__(self, modules: list[str]) -> None:
+        self.sources: list[Path] = []
+        self.include_dirs: list[Path] = []
+        self.link_flags: list[str] = []
+        self.files: list[Path] = []
+        self.library_dir: Path | None = None
+        if ferro.MODULE_NAME not in modules:
+            return
+        shim = runtime_dir() / ferro.SHIM_SOURCE
+        header = runtime_dir() / ferro.SHIM_HEADER
+        abi_header = package_root() / "ffi" / "include" / "ferroui_swim.h"
+        self.sources.append(shim)
+        self.include_dirs.append(package_root() / "ffi" / "include")
+        self.files.extend([shim, header, abi_header])
+        lib_dir = os.environ.get(ferro.LIBRARY_DIR_ENV)
+        self.library_dir = Path(lib_dir) if lib_dir else package_root() / "build"
+        self.link_flags.append("-L%s" % self.library_dir)
+        self.link_flags.append("-l%s" % ferro.LIBRARY_NAME)
+        if os.name != "nt":
+            self.link_flags.append("-Wl,-rpath,%s" % self.library_dir)
 
 
 _COMPILER_SIG: str | None = None
@@ -84,8 +117,8 @@ def cache_dir() -> Path:
 
 @dataclass
 class BuildResult:
-    nim_source: str
-    nim_path: Path
+    source: str
+    source_path: Path
     binary: Path | None = None
     line_map: dict = field(default_factory=dict)
     project: object | None = None  # modules.Project
@@ -112,17 +145,18 @@ def render_swim_error(err: SwimError, source: str) -> str:
     return "\n".join(out)
 
 
-def translate_nim_errors(stderr: str, result: BuildResult) -> str:
-    """Map Nim diagnostics on the generated file back to .sw source lines."""
+def translate_cc_errors(stderr: str, result: BuildResult) -> str:
+    """Map C compiler diagnostics back to .sw source lines where possible."""
     out: list[str] = []
     seen: set = set()
     project = result.project
+    pattern = re.compile(r"^(?P<file>.*?):(?P<line>\d+):(?:(?P<col>\d+):)?\s*"
+                         r"(?P<kind>error|warning):\s*(?P<msg>.*)$")
     for raw in stderr.splitlines():
-        m = NIM_ERROR_RE.match(raw.strip())
+        m = pattern.match(raw.strip())
         if not m:
             continue
-        kind = m.group("kind")
-        if kind == "Hint":
+        if m.group("kind") == "warning":
             continue
         gen_line = int(m.group("line"))
         msg = m.group("msg")
@@ -141,7 +175,7 @@ def translate_nim_errors(stderr: str, result: BuildResult) -> str:
         seen.add(key)
         snippet = ""
         source = project.source_for(path)
-        lines = source.splitlines()
+        lines = source.split("\n")
         if 0 <= local_line - 1 < len(lines):
             snippet = lines[local_line - 1].strip()
         out.append(f"{path}:{local_line}: error: {msg}")
@@ -170,9 +204,9 @@ def error_source(err: SwimError, entry: Path) -> str:
 # ---------------------------------------------------------------------------
 # Compilation pipeline
 # ---------------------------------------------------------------------------
-def compile_project(entry: Path, *, keep: bool = False, nim_only: bool = False,
+def compile_project(entry: Path, *, keep: bool = False, emit_only: bool = False,
                     out_path: Path | None = None,
-                    nim_args: list[str] | None = None,
+                    cc_args: list[str] | None = None,
                     entry_source: str | None = None,
                     defines: list[str] | None = None,
                     mm: str = DEFAULT_MEMORY_MANAGEMENT) -> BuildResult:
@@ -180,40 +214,40 @@ def compile_project(entry: Path, *, keep: bool = False, nim_only: bool = False,
     set_defines(defines)
     project = load_project(entry, entry_source)
     registry = build_registry(project.module, str(entry))
+    # Static semantic checking (pure Python, no code emission).
     try:
-        nim_code, line_map = generate(project.module, registry, str(entry),
-                                      native_modules=project.native_modules)
+        check_program(project.module, registry, str(entry),
+                      native_modules=getattr(project, "native_modules", []))
     except SwimError as err:
-        # codegen errors use composed line numbers; map them back to files
         if err.line is not None:
             owner = project.path_at_line(err.line)
             if owner is not None:
                 err.filename, err.line = str(owner[0]), owner[1]
         raise
 
-    # The runtime is more than swimrt.nim: the native modules (Nimx, Zeta,
-    # FerroUI) are separate Nim files in runtime/ imported by the generated
-    # program, so every runtime file goes into the cache key.
+    c_code = generate_c(project.module, registry, str(entry),
+                        native_modules=project.native_modules)
+    line_map: dict = {}
+    native = NativeLink(project.native_modules)
     runtime_sig = ""
-    rt_dir = runtime_dir()
-    if rt_dir.is_dir():
-        digest = hashlib.sha1()
-        for rt in sorted(rt_dir.glob("*.nim")):
-            digest.update(rt.name.encode("utf8"))
-            digest.update(b"\0")
-            digest.update(rt.read_bytes())
-            digest.update(b"\0")
-        runtime_sig = digest.hexdigest()[:12]
-    elif (rt_dir / "swimrt.nim").exists():
-        runtime_sig = hashlib.sha1((rt_dir / "swimrt.nim").read_bytes()).hexdigest()[:12]
     h = hashlib.sha1()
+    for src in runtime_source_files():
+        h.update(src.read_bytes())
+    hdr = runtime_dir() / "swimrt.h"
+    if hdr.exists():
+        h.update(hdr.read_bytes())
+    for path in native.files:
+        h.update(path.name.encode("utf8"))
+        if path.exists():
+            h.update(path.read_bytes())
+    runtime_sig = h.hexdigest()[:12]
     for sf in project.files:
         h.update(str(sf.path).encode("utf8"))
         h.update(b"\0")
         h.update(sf.source.encode("utf8"))
         h.update(b"\0")
-    h.update((__version__ + runtime_sig + compiler_signature() + mm +
-              repr(nim_args or []) +
+    h.update((__version__ + runtime_sig + compiler_signature() +
+              repr(cc_args or []) +
               repr(sorted(defines or []))).encode("utf8"))
     cache_key = h.hexdigest()[:12]
     workdir = cache_dir() / ("src-" + cache_key)
@@ -222,32 +256,35 @@ def compile_project(entry: Path, *, keep: bool = False, nim_only: bool = False,
     safe_stem = re.sub(r"[^A-Za-z0-9_]", "_", stem)
     if not safe_stem or safe_stem[0].isdigit():
         safe_stem = "swim_" + safe_stem
-    nim_path = workdir / f"{safe_stem}.nim"
+    c_path = workdir / f"{safe_stem}.c"
     if keep:
-        nim_path = Path(entry).with_suffix(".nim")
-    nim_path.write_text(nim_code)
-    result = BuildResult(nim_source=nim_code, nim_path=nim_path,
+        c_path = Path(entry).with_suffix(".c")
+    c_path.write_text(c_code)
+    result = BuildResult(source=c_code, source_path=c_path,
                          line_map=line_map, project=project)
-    if nim_only:
+    if emit_only:
         return result
 
     binary = Path(out_path) if out_path is not None else workdir / safe_stem
     if out_path is None and binary.exists():
         result.binary = binary
         return result
-    cmd = [nim_executable(), "c",
-           f"--mm:{mm}",
-           "--hints:off", "--warnings:off",
-           f"--nimcache:{workdir / 'nimcache'}",
-           f"--path:{runtime_dir()}", f"-o:{binary}"]
-    if nim_args:
-        # Extra compiler flags must come before the source file; anything
-        # after it is treated as a program argument by nim.
-        cmd.extend(nim_args)
-    cmd.append(str(nim_path))
+    cmd = [cc_executable(), "-std=c11", "-O2", "-w",
+           "-I", str(runtime_dir())]
+    for include in native.include_dirs:
+        if include.exists():
+            cmd.extend(["-I", str(include)])
+    cmd.append(str(c_path))
+    cmd.extend(str(p) for p in runtime_source_files())
+    cmd.extend(str(p) for p in native.sources)
+    cmd.extend(["-o", str(binary)])
+    cmd.extend(native.link_flags)
+    cmd.append("-lm")
+    if cc_args:
+        cmd[1:1] = cc_args
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
-        raise BuildFailure(translate_nim_errors(proc.stderr, result), result)
+        raise BuildFailure(translate_cc_errors(proc.stderr, result), result)
     result.binary = binary
     return result
 
@@ -274,7 +311,7 @@ def run_binary(binary: Path, args: list[str]) -> int:
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
-USAGE = """Swim -- a Swift-flavoured language that compiles to Nim
+USAGE = """Swim -- a Swift-flavoured language that compiles to C
 
 Usage:
   Swim <file.sw> [args...]     compile and run a program
@@ -282,7 +319,7 @@ Usage:
   Swim build <file.sw> [-o <out>] [--keep]
                                compile to a native executable
   Swim check <file.sw>         type-check / compile without producing output
-  Swim emit <file.sw>          print the generated Nim source
+  Swim emit <file.sw>          print the generated C source
   Swim deps <file.sw>          show resolved module imports and order
   Swim new <name>              create a new program in <name>.sw
   Swim test [options]          run the compiler's test suite (checkout only)
@@ -291,18 +328,17 @@ Usage:
 
 Options:
   -o, --output <path>   output executable path (build only)
-  --keep                write the generated .nim file next to the source
-  --release             compile with Nim optimisations (-d:release)
+  --keep                write the generated .c file next to the source
+  --release             compile with -O3
   --cache-dir <path>    override the build cache directory
   -D <name>, --define <name>
                         define a flag for #if conditional compilation
-  --mm <mode>           memory management: arc (default), atomicArc, orc, refc
-                        (atomicArc = Swift-style atomically refcounted ARC)
-  --nim-arg <flag>      extra flag for the Nim compiler (repeatable), e.g.
-                        --nim-arg:--path:/opt/nimx
+  --mm <mode>           memory management: atomicArc (Swift-style atomically
+                        refcounted ARC; the only mode of the C backend)
+  --cc-arg <flag>       extra flag for the C compiler (repeatable)
 
-Memory management: ARC by default (--mm:arc); use --mm:atomicArc for Swift
-semantics.  License: MIT.
+Memory management: Swift-style atomic ARC, implemented by runtime/swimrt.c.
+License: MIT.
 """
 
 TEMPLATE = r"""// {name}.sw -- a Swim program
@@ -342,7 +378,7 @@ def _compile_with_diagnostics(entry: Path, **kwargs):
 def _parse_common(rest: list[str]) -> tuple[list[str], dict]:
     """Separate file/args from options for the simple commands."""
     opts = {"keep": False, "release": False, "output": None, "cache": None,
-            "defines": [], "mm": DEFAULT_MEMORY_MANAGEMENT, "nim_args": []}
+            "defines": [], "mm": DEFAULT_MEMORY_MANAGEMENT, "cc_args": []}
     pos: list[str] = []
     i = 0
     while i < len(rest):
@@ -377,16 +413,16 @@ def _parse_common(rest: list[str]) -> tuple[list[str], dict]:
             opts["mm"] = mode
             i += 1
             continue
-        if arg == "--nim-arg" and i + 1 < len(rest):
-            opts["nim_args"].append(rest[i + 1])
+        if arg == "--cc-arg" and i + 1 < len(rest):
+            opts["cc_args"].append(rest[i + 1])
             i += 2
             continue
-        if arg.startswith("--nim-arg="):
-            opts["nim_args"].append(arg.split("=", 1)[1])
+        if arg.startswith("--cc-arg="):
+            opts["cc_args"].append(arg.split("=", 1)[1])
             i += 1
             continue
-        if arg.startswith("--nim-arg:"):
-            opts["nim_args"].append(arg[len("--nim-arg:"):])
+        if arg.startswith("--cc-arg:"):
+            opts["cc_args"].append(arg[len("--cc-arg:"):])
             i += 1
             continue
         if arg == "--keep":
@@ -416,15 +452,15 @@ def cmd_run(args: list[str]) -> int:
     if opts["cache"]:
         os.environ["SWIM_CACHE"] = opts["cache"]
     try:
-        nim_args = list(opts["nim_args"])
+        cc_args = list(opts["cc_args"])
         if opts["release"]:
-            nim_args.append("-d:release")
+            cc_args.append("-O3")
         result = _compile_with_diagnostics(
             path, keep=opts["keep"], defines=opts["defines"],
-            mm=opts["mm"], nim_args=nim_args or None)
+            mm=opts["mm"], cc_args=cc_args or None)
     except BuildFailure as exc:
         print(exc.message, file=sys.stderr)
-        print("(set --keep to inspect the generated Nim source)", file=sys.stderr)
+        print("(set --keep to inspect the generated C source)", file=sys.stderr)
         return 1
     assert result.binary is not None
     return run_binary(result.binary, pos[1:])
@@ -442,13 +478,13 @@ def cmd_build(args: list[str]) -> int:
     out = Path(opts["output"]) if opts["output"] else \
         Path.cwd() / (path.stem or "program")
     try:
-        nim_args = list(opts["nim_args"])
+        cc_args = list(opts["cc_args"])
         if opts["release"]:
-            nim_args.append("-d:release")
+            cc_args.append("-O3")
         result = _compile_with_diagnostics(
             path, keep=opts["keep"], out_path=out,
             defines=opts["defines"], mm=opts["mm"],
-            nim_args=nim_args or None)
+            cc_args=cc_args or None)
     except BuildFailure as exc:
         print(exc.message, file=sys.stderr)
         return 1
@@ -528,9 +564,9 @@ def cmd_emit(args: list[str]) -> int:
     _load(path)
     if opts["cache"]:
         os.environ["SWIM_CACHE"] = opts["cache"]
-    result = _compile_with_diagnostics(path, nim_only=True,
+    result = _compile_with_diagnostics(path, emit_only=True,
                                         defines=opts["defines"])
-    print(result.nim_source, end="")
+    print(result.source, end="")
     return 0
 
 
@@ -541,10 +577,10 @@ def cmd_check(args: list[str]) -> int:
         return 2
     path = Path(pos[0])
     _load(path)
-    nim_args = list(opts["nim_args"])
+    cc_args = list(opts["cc_args"])
     try:
         _compile_with_diagnostics(path, defines=opts["defines"], mm=opts["mm"],
-                                  nim_args=nim_args or None)
+                                  cc_args=cc_args or None)
     except BuildFailure as exc:
         print(exc.message, file=sys.stderr)
         return 1
@@ -565,8 +601,7 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "test":
         return _guard(lambda: cmd_test(argv[1:]))
     if cmd in ("version", "--version", "-v"):
-        print(f"Swim {__version__} (Nim backend, default --mm:"
-              f"{DEFAULT_MEMORY_MANAGEMENT}, MIT)")
+        print(f"Swim {__version__} (direct C backend, atomic ARC, MIT)")
         return 0
     if cmd == "run":
         return _guard(lambda: cmd_run(argv[1:]))

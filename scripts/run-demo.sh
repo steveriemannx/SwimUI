@@ -1,35 +1,36 @@
 #!/usr/bin/env bash
 # Build and run a Swim program that uses the `FerroUI` native module.
 #
-# The bridge library (`scripts/build-ffi.sh`) is built on demand; the program
-# is compiled with Swim and started in this terminal.  The default program is
-# the SwimUI demo (`ui/FerroUIDemo.sw`).
+# The bridge library (`scripts/build-ffi.sh`) is built on demand; the program is
+# compiled by Swim (which compiles the C shim `runtime/swimferroui.c` into it and
+# links the bridge) and started in this terminal.  The default program is the
+# SwimUI demo (`ui/LibraryApp.sw`).
 #
 #   scripts/run-demo.sh                       run the demo
 #   scripts/run-demo.sh --snapshot ui/shots/demo.png
 #                                             snapshot the window, then quit
 #   scripts/run-demo.sh --smoke               one frame, then quit (for tests)
 #   scripts/run-demo.sh --no-run              build only
-#   scripts/run-demo.sh --program ui/Other.sw
+#   scripts/run-demo.sh --program ui/CounterApp.sw
 #   scripts/run-demo.sh -- <arg> ...          pass arguments to the program
 #
-# Environment:
-#   SWIMUI_MM          Swim memory management (default: arc)
-#   SWIMUI_TIMEOUT_MS  how long the window stays open in a snapshot/smoke run
-#   FERROUI_DIR        the FerroUI checkout to build the bridge against
+# A program reads two environment variables at run time, which is how a test or
+# a documentation run drives it without a person:
+#   SWIMUI_IMAGE     write a PNG of the window there (`snapshot(...)`)
+#   SWIMUI_QUIT_MS   close the window after that many milliseconds
+#   SWIMUI_THEME_VARIANT  "dark", "light" or "system" (unless the program sets it)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 SWIM="$ROOT/bin/Swim"
 
-PROGRAM="$ROOT/ui/FerroUIDemo.sw"
-OUT="$ROOT/build/FerroUIDemo"
+PROGRAM="$ROOT/ui/LibraryApp.sw"
+OUT="$ROOT/build/demo"
 SNAPSHOT=""
 SMOKE=0
 NO_RUN=0
-MM="${SWIMUI_MM:-arc}"
-TIMEOUT_MS="${SWIMUI_TIMEOUT_MS:-}"
+TIMEOUT_MS="${SWIMUI_QUIT_MS:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -45,10 +46,10 @@ while [ $# -gt 0 ]; do
       PROGRAM="$2"; shift 2 ;;
     --program=*)
       PROGRAM="${1#--program=}"; shift ;;
-    --mm)
-      MM="$2"; shift 2 ;;
+    --timeout)
+      TIMEOUT_MS="$2"; shift 2 ;;
     -h|--help)
-      sed -n '2,22p' "$0"; exit 0 ;;
+      sed -n '2,23p' "$0"; exit 0 ;;
     --)
       shift; break ;;
     *)
@@ -57,11 +58,13 @@ while [ $# -gt 0 ]; do
 done
 
 [ -x "$SWIM" ] || { echo "run-demo.sh: no Swim launcher at $SWIM" >&2; exit 1; }
-# The SwimUI view layer is a Swim module of ui/; programs elsewhere (the tests)
-# find it through SWIM_PATH.
-export SWIM_PATH="$ROOT/ui${SWIM_PATH:+:$SWIM_PATH}"
 PROGRAM="$(cd "$(dirname "$PROGRAM")" && pwd)/$(basename "$PROGRAM")"
 [ -f "$PROGRAM" ] || { echo "run-demo.sh: no program at $PROGRAM" >&2; exit 1; }
+
+# The SwimUI view layer is the Swim module ui/SwiftUI.sw; programs elsewhere
+# (the tests) find it through SWIM_PATH.
+export SWIM_PATH="$ROOT/ui${SWIM_PATH:+:$SWIM_PATH}"
+
 case "$(uname -s)" in
   Darwin) BRIDGE="$ROOT/build/libferroui_swim.dylib" ;;
   *) BRIDGE="$ROOT/build/libferroui_swim.so" ;;
@@ -71,7 +74,6 @@ if [ ! -f "$BRIDGE" ]; then
   "$HERE/build-ffi.sh"
 fi
 
-NIM_ARGS=()
 mkdir -p "$ROOT/build"
 if [ "$SMOKE" = "1" ] && [ -z "$SNAPSHOT" ]; then
   SNAPSHOT="$ROOT/build/smoke.png"
@@ -80,20 +82,17 @@ if [ -n "$SNAPSHOT" ]; then
   SNAPSHOT_DIR="$(dirname "$SNAPSHOT")"
   mkdir -p "$SNAPSHOT_DIR"
   SNAPSHOT="$(cd "$SNAPSHOT_DIR" && pwd)/$(basename "$SNAPSHOT")"
-  NIM_ARGS+=("--nim-arg:-d:swimFerroUIImage=$SNAPSHOT")
+  export SWIMUI_IMAGE="$SNAPSHOT"
   if [ -z "$TIMEOUT_MS" ]; then
-    TIMEOUT_MS=2400
+    TIMEOUT_MS=2600
   fi
 fi
-if [ "$SMOKE" = "1" ] && [ -z "${SWIMUI_TIMEOUT_MS:-}" ]; then
-  TIMEOUT_MS="${TIMEOUT_MS:-2400}"
-fi
 if [ -n "$TIMEOUT_MS" ] && [ "$TIMEOUT_MS" != "0" ]; then
-  NIM_ARGS+=("--nim-arg:-d:swimFerroUIQuitMs=$TIMEOUT_MS")
+  export SWIMUI_QUIT_MS="$TIMEOUT_MS"
 fi
 
 echo "run-demo.sh: building $(basename "$PROGRAM")"
-"$SWIM" build "$PROGRAM" -o "$OUT" --mm "$MM" "${NIM_ARGS[@]}"
+"$SWIM" build "$PROGRAM" -o "$OUT"
 
 if [ "$NO_RUN" = "1" ]; then
   echo "run-demo.sh: built $OUT"

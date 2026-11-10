@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
-"""End-to-end tests of the `FerroUI` native module: the SwimUI binding.
+"""End-to-end tests of the `FerroUI` native module and of the SwiftUI-shaped
+layer of SwimUI.
 
-The binding is four layers -- the compiler table, the Nim bridge
-(runtime/swimferroui.nim), the Rust bridge (ffi/) and FerroUI itself -- and the
-tests here check each one where it can be checked without a person in front of
-the screen:
+The binding is four layers -- the compiler table, the C shim
+(runtime/swimferroui.c), the Rust bridge (ffi/) and FerroUI itself -- with a
+declarative view layer (ui/SwiftUI.sw) on top of it.  The tests check each
+layer where it can be checked without a person in front of the screen:
 
 1. the compiler: `import FerroUI` resolves as a native module, `Swim emit`
-   emits `import swimferroui` and the `swimFerroUI*` calls, and a call without
-   the import is reported as an error;
-2. the bridge: `Swim check` accepts every program under ui/ and
-   tests/binding/, and the shared library exists (built on demand with
-   scripts/build-ffi.sh);
-3. the demo: it builds, runs, writes a 390 x 844 PNG that is not blank, quits
-   by itself and reports no failed bridge call;
-4. the binding scene (tests/binding/BindingTest.sw): it changes properties,
-   reads them back, raises a click as a pointer would, and writes two
-   snapshots that differ.
+   emits `#include "swimferroui.h"` and the `swimferroui_*` calls, a call
+   without the import is reported, and the retired `import Nimx` explains
+   itself;
+2. the programs: every program under ui/ and tests/binding/ type-checks and
+   builds, with the C shim compiled in and the bridge linked;
+3. the native module (tests/binding/NativeTest.sw): every control, the
+   setters and getters, events raised as a pointer would raise them, timers and
+   two snapshots that differ, with no failed bridge call;
+4. the layer (tests/binding/SwiftUITest.sw): state changes re-render and patch
+   the mounted controls in place (the text read back from the controls proves
+   it), a click raised as a pointer would runs the button action, and the
+   snapshot before and after the state change differ;
+5. the demo (ui/LibraryApp.sw): it runs, writes a 390 x 844 PNG with content,
+   quits by itself and reports no failed bridge call.
 
 Usage:
     python3 tests/binding_test.py [--no-build] [-v]
@@ -62,20 +67,28 @@ def debug(message: str) -> None:
         print("  " + message)
 
 
-def run(command: list[str], *, cwd: Path = ROOT, env: dict | None = None,
+def environment(extra: dict | None = None) -> dict:
+    env = dict(os.environ)
+    env.setdefault("SWIM_PATH", str(UI))
+    # The tests must not inherit the settings of a documentation run.
+    env.pop("SWIMUI_IMAGE", None)
+    env.pop("SWIMUI_QUIT_MS", None)
+    if extra:
+        env.update(extra)
+    return env
+
+
+def run(command: list[str], *, env: dict | None = None,
         timeout: int = 900) -> subprocess.CompletedProcess:
-    environment = dict(os.environ)
-    environment.setdefault("SWIM_PATH", str(UI))
-    if env:
-        environment.update(env)
     debug("$ " + " ".join(str(part) for part in command))
-    return subprocess.run([str(part) for part in command], cwd=str(cwd),
+    return subprocess.run([str(part) for part in command], cwd=str(ROOT),
                           capture_output=True, text=True, timeout=timeout,
-                          env=environment)
+                          env=environment(env))
 
 
-def swim(*arguments: str, timeout: int = 900) -> subprocess.CompletedProcess:
-    return run([SWIM, *arguments], timeout=timeout)
+def swim(*arguments: str, env: dict | None = None,
+         timeout: int = 900) -> subprocess.CompletedProcess:
+    return run([SWIM, *arguments], env=env, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -84,8 +97,7 @@ def swim(*arguments: str, timeout: int = 900) -> subprocess.CompletedProcess:
 def png_size(data: bytes) -> tuple[int, int]:
     if data[:8] != b"\x89PNG\r\n\x1a\n":
         raise Failure("the file is not a PNG")
-    width, height = struct.unpack(">II", data[16:24])
-    return width, height
+    return struct.unpack(">II", data[16:24])
 
 
 def png_colours(data: bytes) -> set[bytes]:
@@ -152,6 +164,32 @@ def check_png(path: Path, width: int, height: int, minimum_colours: int) -> None
     log(f"  {path.name}: {width}x{height}, {len(colours)} colours")
 
 
+def check_no_bridge_errors(output: str) -> None:
+    if "swimferroui:" in output:
+        raise Failure("the bridge reported a failed call:\n" + output)
+
+
+def check_lines(output: str) -> dict[str, str]:
+    seen: dict[str, str] = {}
+    for line in output.splitlines():
+        match = re.match(r"^check: ([A-Za-z0-9_]+)=(.*)$", line.strip())
+        if match:
+            seen[match.group(1)] = match.group(2)
+    return seen
+
+
+def assert_checks(seen: dict[str, str], expected: dict[str, str], output: str) -> None:
+    missing = sorted(set(expected) - set(seen))
+    if missing:
+        raise Failure("the checks that did not print: " + ", ".join(missing) + "\n" + output)
+    wrong = {name: (seen[name], want) for name, want in expected.items()
+             if seen[name] != want}
+    if wrong:
+        detail = "\n".join(f"  {name}: {got!r}, expected {want!r}"
+                           for name, (got, want) in sorted(wrong.items()))
+        raise Failure("checks that disagree:\n" + detail + "\n" + output)
+
+
 # ---------------------------------------------------------------------------
 # 1. The compiler
 # ---------------------------------------------------------------------------
@@ -161,69 +199,75 @@ def test_compiler() -> None:
         directory = Path(directory)
 
         without = directory / "WithoutImport.sw"
-        without.write_text(
-            "let h = ferrouiLabel(parent: 0, x: 0, y: 0, width: 10, height: 10,\n"
-            '                     text: "x", size: 10, color: 0, align: 0, bold: false)\n'
-        )
+        without.write_text('let unused = ferrouiLog(message: "no import")\n')
         result = swim("check", str(without))
         if result.returncode == 0:
-            raise Failure("a call of ferrouiLabel without 'import FerroUI' compiled")
+            raise Failure("a call of a ferroui* function without 'import FerroUI' compiled")
         if "import FerroUI" not in result.stdout + result.stderr:
             raise Failure("the missing-import error does not mention 'import FerroUI':\n"
                           + result.stdout + result.stderr)
         log("  a call without the import is reported")
 
+        retired = directory / "Retired.sw"
+        retired.write_text("import Nimx\n\nprint(1)\n")
+        result = swim("check", str(retired))
+        if result.returncode == 0:
+            raise Failure("the retired 'import Nimx' compiled")
+        if "retired" not in result.stdout + result.stderr:
+            raise Failure("the retired module error does not explain itself:\n"
+                          + result.stdout + result.stderr)
+        log("  the retired Nimx module explains itself")
+
         with_import = directory / "WithImport.sw"
         with_import.write_text(
             "import FerroUI\n"
             "\n"
+            'ferrouiSetThemeVariant(name: "dark")\n'
             "ferrouiRun {\n"
-            '    let title = ferrouiVersion()\n'
-            '    ferrouiLog(message: "FerroUI " + title)\n'
+            "    let window = ferrouiWindow(width: 320, height: 200,\n"
+            '                               title: "Compiler", background: 0x0B0C10,\n'
+            "                               onClosed: {})\n"
+            "    let canvas = ferrouiCreate(parent: window, kind: 1)\n"
+            "    let label = ferrouiCreate(parent: canvas, kind: 4)\n"
+            '    ferrouiSetString(handle: label, property: 1, value: "compiler")\n'
+            "    ferrouiQuit()\n"
             "}\n"
         )
         result = swim("check", str(with_import))
         if result.returncode != 0:
             raise Failure("a program with 'import FerroUI' did not compile:\n"
                           + result.stdout + result.stderr)
-        log("  'import FerroUI' type-checks")
+        log("  'import FerroUI' type-checks and builds with the C shim")
 
         result = swim("emit", str(with_import))
         if result.returncode != 0:
             raise Failure("Swim emit failed:\n" + result.stdout + result.stderr)
-        nim = result.stdout
-        for expected in ("import swimferroui", "swimFerroUIRun(", "swimFerroUIVersion("):
-            if expected not in nim:
-                raise Failure(f"the generated Nim misses {expected!r}")
-        log("  the generated Nim imports swimferroui and calls the bridge")
-
-        module = directory / "FerroUIManual.sw"
-        module.write_text(
-            "import FerroUI\n"
-            "\n"
-            "let base = 3\n"
-            "ferrouiAfter(ms: 1) {\n"
-            '    ferrouiLog(message: "alive")\n'
-            "}\n"
-        )
-        if swim("check", str(module)).returncode != 0:
-            raise Failure("a program that only uses ferrouiAfter/ferrouiLog did not compile")
-        log("  a program may import FerroUI for its helpers only")
+        c_code = result.stdout
+        for expected in ('#include "swimferroui.h"', "swimferroui_run(",
+                         "swimferroui_window(", "swimferroui_create(",
+                         "swimferroui_set_string("):
+            if expected not in c_code:
+                raise Failure(f"the generated C misses {expected!r}")
+        log("  the generated C includes the shim and calls the bridge")
 
 
 # ---------------------------------------------------------------------------
-# 2. The program check of everything under ui/ and tests/binding/
+# 2. Build every program of the binding
 # ---------------------------------------------------------------------------
 def test_programs() -> None:
-    log("programs: type-check the view layer, the demo and the tests")
+    log("programs: the view layer, the demo and the tests")
     programs = sorted(UI.glob("*.sw")) + sorted(BINDING.glob("*.sw"))
     if not programs:
         raise Failure("no Swim programs under ui/ or tests/binding/")
+    out = BUILD / "test"
+    out.mkdir(parents=True, exist_ok=True)
     for program in programs:
-        result = swim("check", str(program))
+        target = out / program.stem
+        result = swim("build", str(program), "-o", str(target))
         if result.returncode != 0:
-            raise Failure(f"{program.relative_to(ROOT)} did not type-check:\n"
+            raise Failure(f"{program.relative_to(ROOT)} did not build:\n"
                           + result.stdout + result.stderr)
+        debug(f"built {target}")
         log(f"  {program.relative_to(ROOT)}")
 
 
@@ -246,7 +290,97 @@ def ensure_bridge(no_build: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. The demo
+# 4. The native module test
+# ---------------------------------------------------------------------------
+NATIVE_CHECKS = {
+    "text": "typed",
+    "buttonTitle": "Tap me",
+    "sliderValue": "25.0",
+    "checked": "true",
+    "visible": "true",
+    "hidden": "false",
+    "toggled": "true",
+    "extraChildReleased": "true",
+    "tapsAfterRaise": "2",
+    "sliderSet": "90.0",
+    "valuesSeen": "1",
+}
+
+
+def test_native_module() -> None:
+    log("native: controls, properties, events, timers, snapshots")
+    out = BUILD / "test"
+    binary = out / "NativeTest"
+    if not binary.is_file():
+        raise Failure("build/test/NativeTest is missing (see the program test)")
+    image = out / "native.png"
+    after = Path(str(image) + ".after.png")
+    for path in (image, after):
+        if path.exists():
+            path.unlink()
+    result = run([binary], env={"SWIMUI_IMAGE": str(image),
+                                "SWIMUI_QUIT_MS": "1600"}, timeout=300)
+    output = result.stdout + result.stderr
+    if result.returncode != 0:
+        raise Failure("NativeTest did not exit cleanly:\n" + output)
+    check_no_bridge_errors(output)
+    assert_checks(check_lines(output), NATIVE_CHECKS, output)
+    log(f"  {len(NATIVE_CHECKS)} observations agree")
+    check_png(image, 320, 260, 30)
+    check_png(after, 320, 260, 30)
+    if image.read_bytes() == after.read_bytes():
+        raise Failure("the native snapshots before and after the changes are identical")
+    log("  the two snapshots differ")
+
+
+# ---------------------------------------------------------------------------
+# 5. The SwiftUI layer test
+# ---------------------------------------------------------------------------
+LAYER_CHECKS = {
+    "tapped": "true",
+    "slider": "80.0",
+    "done": "true",
+}
+
+
+def test_swiftui_layer() -> None:
+    log("layer: state, re-render/patch, a click, snapshots")
+    out = BUILD / "test"
+    binary = out / "SwiftUITest"
+    if not binary.is_file():
+        raise Failure("build/test/SwiftUITest is missing (see the program test)")
+    base = out / "swiftui.png"
+    before = Path(str(base) + ".before.png")
+    after = Path(str(base) + ".after.png")
+    for path in (before, after, base):
+        if path.exists():
+            path.unlink()
+    result = run([binary], env={"SWIMUI_IMAGE": str(base),
+                                "SWIMUI_QUIT_MS": "1300"}, timeout=300)
+    output = result.stdout + result.stderr
+    if result.returncode != 0:
+        raise Failure("SwiftUITest did not exit cleanly:\n" + output)
+    check_no_bridge_errors(output)
+    seen = check_lines(output)
+    assert_checks(seen, LAYER_CHECKS, output)
+    texts = seen.get("texts", "")
+    # The controls were patched in place: the text read back from the mounted
+    # controls shows the state written after the first render, and the click of
+    # the "Add" button ran the action (5 + 1 = 6).
+    for expected in ("count=6", "toggle=true", "slider=80", "text=typed",
+                     "rows=1", "Add", "row one"):
+        if expected not in texts:
+            raise Failure(f"the patched controls do not show {expected!r}:\n  {texts}")
+    log("  the mounted controls show the new state")
+    check_png(before, 320, 560, 30)
+    check_png(after, 320, 560, 30)
+    if before.read_bytes() == after.read_bytes():
+        raise Failure("the layer snapshots before and after the state change are identical")
+    log("  the two snapshots differ")
+
+
+# ---------------------------------------------------------------------------
+# 6. The demo
 # ---------------------------------------------------------------------------
 def test_demo() -> None:
     log("demo: build, run, snapshot, quit")
@@ -257,86 +391,9 @@ def test_demo() -> None:
     output = result.stdout + result.stderr
     if result.returncode != 0:
         raise Failure("the demo did not exit cleanly:\n" + output)
-    if "swimferroui:" in output:
-        raise Failure("the bridge reported a failed call while the demo ran:\n" + output)
+    check_no_bridge_errors(output)
     check_png(snapshot, 390, 844, 40)
     log("  the demo ran without a failed bridge call")
-
-
-# ---------------------------------------------------------------------------
-# 5. The binding scene
-# ---------------------------------------------------------------------------
-EXPECTED_CHECKS = {
-    "ready": "true",
-    "clientWidth": "320",
-    "clientHeight": "480",
-    "labelText": "before",
-    "buttonText": "tap",
-    "fieldText": "field",
-    "sliderValue": "10.0",
-    "barValue": "10.0",
-    "checkboxBefore": "false",
-    "visibleBefore": "true",
-    "labelTextAfter": "after",
-    "buttonTextAfter": "tapped",
-    "fieldTextAfter": "changed",
-    "sliderValueAfter": "55.0",
-    "barValueAfter": "75.0",
-    "checkboxAfter": "true",
-    "tapsAfterRaise": "1",
-    "tapsAfterSecondRaise": "2",
-    "movedValue": "55.0",
-    "visibleHidden": "false",
-    "visibleShown": "true",
-    "quitting": "true",
-}
-
-
-def test_binding_scene() -> None:
-    log("binding: change properties, read them back, raise a click")
-    out = BUILD / "test"
-    out.mkdir(parents=True, exist_ok=True)
-    before = out / "binding-before.png"
-    for path in (before, Path(str(before) + ".after.png")):
-        if path.exists():
-            path.unlink()
-    binary = out / "BindingTest"
-    result = swim("build", str(BINDING / "BindingTest.sw"), "-o", str(binary),
-                  "--nim-arg:-d:swimFerroUIImage=" + str(before),
-                  "--nim-arg:-d:swimFerroUIQuitMs=1900")
-    if result.returncode != 0:
-        raise Failure("BindingTest.sw did not build:\n" + result.stdout + result.stderr)
-    result = run([binary], timeout=300)
-    output = result.stdout + result.stderr
-    if result.returncode != 0:
-        raise Failure("BindingTest did not exit cleanly:\n" + output)
-    if "swimferroui:" in output:
-        raise Failure("the bridge reported a failed call:\n" + output)
-
-    seen: dict[str, str] = {}
-    for line in output.splitlines():
-        match = re.match(r"^check: ([A-Za-z0-9_]+)=(.*)$", line.strip())
-        if match:
-            seen[match.group(1)] = match.group(2)
-    missing = sorted(set(EXPECTED_CHECKS) - set(seen))
-    if missing:
-        raise Failure("the checks that did not print: " + ", ".join(missing) + "\n" + output)
-    wrong = {name: (seen[name], expected) for name, expected in EXPECTED_CHECKS.items()
-             if seen[name] != expected}
-    if wrong:
-        detail = "\n".join(f"  {name}: {got!r}, expected {expected!r}"
-                           for name, (got, expected) in sorted(wrong.items()))
-        raise Failure("checks that disagree:\n" + detail + "\n" + output)
-    log(f"  {len(seen)} observations agree")
-
-    check_png(before, 320, 480, 30)
-    after = Path(str(before) + ".after.png")
-    if not after.is_file():
-        raise Failure(f"no second snapshot at {after}")
-    check_png(after, 320, 480, 30)
-    if before.read_bytes() == after.read_bytes():
-        raise Failure("the snapshots before and after the changes are identical")
-    log("  the snapshots before and after the changes differ")
 
 
 # ---------------------------------------------------------------------------
@@ -354,13 +411,13 @@ def main() -> int:
         return 1
     BUILD.mkdir(exist_ok=True)
 
-    tests = [test_compiler, test_programs]
     try:
-        for test in tests:
-            test()
+        test_compiler()
         ensure_bridge(arguments.no_build)
-        for test in (test_demo, test_binding_scene):
-            test()
+        test_programs()
+        test_native_module()
+        test_swiftui_layer()
+        test_demo()
     except Failure as failure:
         print()
         print("FAILED:", failure)

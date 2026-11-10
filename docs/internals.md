@@ -12,8 +12,9 @@ swimc/cli.py
   ├─ lexer.py     : source → token stream (with string interpolation parts)
   ├─ parser.py    : token stream → AST (ast_nodes.py)
   ├─ types.py     : AST → Registry (types/members/functions/aliases/extensions)
-  ├─ codegen.py   : Registry + AST → Nim source + line mapping
-  └─ nim compiler : Nim source + runtime/swimrt.nim → native executable
+  ├─ checker.py   : pure-Python static semantic checks / diagnostics
+  ├─ codegen_c.py : Registry + AST → C source + type metadata + line mapping
+  └─ cc           : C source + runtime/swimrt*.c → native executable
 ```
 
 Entry point: `bin/Swim` → `src/swimc/main.py` → `swimc.cli:main`.
@@ -71,8 +72,8 @@ Entry point: `bin/Swim` → `src/swimc/main.py` → `swimc.cli:main`.
 - Type names may be dotted (`Outer.Inner`); nested type declarations are
   parsed as ordinary members of their enclosing type.
 - `where T: Protocol` clauses are merged into the generic parameter's
-  constraint list while parsing (so codegen emits them as Nim concept
-  constraints); same-type constraints are parsed and ignored.
+  constraint list while parsing (the checker verifies them structurally);
+  same-type constraints are parsed and ignored.
 - Declarations and statements have separate entry points; type members
   (`struct/class/enum/protocol/extension`) each have their own member loop.
 - Backtracking (`Backtrack` exception) implements generic inference for
@@ -95,7 +96,7 @@ Entry point: `bin/Swim` → `src/swimc/main.py` → `swimc.cli:main`.
 - Error enums (`enum E: Error`) are recorded with `is_error`; codegen emits the
   exception type hierarchy.
 - Nested types are registered recursively with qualified names
-  (`Outer.Inner`) and mangled Nim names (`Outer_Inner`); `TypeInfo.parent` /
+  (`Outer.Inner`) and mangled C names (`Outer_Inner`); `TypeInfo.parent` /
   `TypeInfo.nested` support unqualified lookup inside the enclosing type and
   `Outer.Inner` lookup outside. Nested `typealias` declarations are available
   in the type's generic/nested environment.
@@ -103,111 +104,47 @@ Entry point: `bin/Swim` → `src/swimc/main.py` → `swimc.cli:main`.
   `(fixity, symbol)`; static operators declared in types/extensions are
   registered the same way.
 
-### 4. Code generation (`codegen.py`)
+### 4. Static checking (`checker.py`) and the C backend (`codegen_c.py`)
 
-Emission order is fixed:
+- `checker.py` performs the front-end's static semantics on the AST built by
+  the parser and the symbol tables from `types.py`.  It is pure Python and
+  emits nothing.  It reports mutability errors (assignment to `let` constants,
+  `let` properties, static `let`s and read-only subscripts), unknown members on
+  user types and built-in values, implicit conversion failures, missing
+  arguments, invalid enum cases, misplaced `fallthrough`, `guard` blocks that
+  do not exit, non-`nil` returns from failable initializers, user-defined
+  assignment operators, retired native-module references and similar errors.
+  Diagnostics carry composed line numbers so the CLI maps them back to the
+  originating module file.
+- `codegen_c.py` is the **direct C backend** and the only code generator.  It
+  lowers the checked AST to C targeting `runtime/swimrt.h`.
 
-1. header (version, `import swimrt`)
-2. type declarations (structs/classes/enums/protocol concepts/error types/
-   aliases) — all in a single Nim `type` section so types may reference each
-   other (including nested types) regardless of source order
-3. global variable declarations (without initializers)
-4. forward declarations for all procedures
-5. procedure definitions (free functions, methods, initializers, computed
-   properties, static members, extensions, enum helpers, synthesized
-   `$`/`==`/`hash`/`allCases`, ...)
-6. static variable initialization
-7. top-level code (global initialization and top-level statements in source
-   order)
-8. `@main` entry call
+The C backend is deliberately *dynamic* at run time so that it can support the
+full language on top of a small static checker:
 
-Key designs:
-
-- **Forward declarations**: Nim requires declaration before use, so every proc
-  gets a signature first and its body later. Default parameter values are
-  emitted on the declaration and omitted on the definition.
-- **Naming**: `nim_ident()` handles Nim keyword/runtime symbol collisions with
-  a `sw_` prefix. User type names that collide with Nim names get a `Swim`
-  prefix. Static methods, constructors and enum constructors use names such as
-  `Type_method`, `newType`, `Type_case` to avoid collisions.
-- **Structs**: `object`; `mutating` methods take `self: var T`.
-- **Classes**: `ref object of RootObj`. Covered methods with inheritance
-  generate an "impl proc + method wrapper" pair to support dynamic dispatch and
-  static `super.method()` calls.
-- **Enums**: no associated values → `{.pure.} enum`; associated values → kind
-  enum + variant object; recursive enums automatically use
-  `ref object of RootObj`; string raw values generate `rawValue`/`fromRaw`.
-- **Protocols**: generate Nim concepts (method/property requirements); protocol
-  extensions generate generic procs constrained by the concept.
-- **Optional chaining**: `a?.b?.c` compiles to nested `swimOptFlatMap` template
-  calls (defined by the runtime).
-- **`if let` / `guard let`**: generate a temporary plus `isSome` checks and
-  `get`.
-- **Pattern matching**: `switch` compiles to an `if` chain guarded by a
-  `swMatched` flag; enum associated values are only read after the condition
-  succeeds, avoiding variant-object field access errors.
-- **Top-level order**: global variables are declared first (so procs can
-  reference them); initialization and top-level statements execute in
-  `top_items` order, matching Swift's top-level execution order.
-- **Error mapping**: `CodeGen.line_map` records generated Nim line → composed
-  line; `Project.line_owner` maps composed lines back to (module file, local
-  line), and `cli.translate_nim_errors` /
-  `Project.normalize_codegen_error` print the correct module snippet.
-- **Closures**: single-expression closures generate `{.closure.}` proc
-  literals; multi-statement closures generate proc literals with bodies.
-  Higher-order trailing closures prefer the It-template path (`mapIt`, etc.).
-- **Property observers**: a `var` with `willSet`/`didSet` becomes a hidden
-  backing field (`swimBk_<name>`) plus a getter proc and a `` `<name>=` ``
-  setter proc. The setter saves the old value, runs `willSet`, stores, then
-  runs `didSet`. Initializers and the synthesized memberwise initializer write
-  the backing field directly so observers do not fire during initialization.
-  Compound assignments through a setter are expanded to
-  `prop = prop <op> value`, and mutating collection/string method calls on an
-  observed property are rewritten to a read-modify-write (`var tmp = ...`,
-  mutate, `obj.prop = tmp`) so the observer runs once.
-- **Failable initializers**: `init?` lowers to an `initT(...): bool` proc
-  (calls return `true`/`false`; `return nil` becomes `return false`, falling off
-  the end returns `true`) plus a `newT(...): Option[T]` constructor. `init!`
-  uses the same pair and unwraps at the call site. `super.init`/`self.init`
-  delegation propagates the bool (a failed delegated initializer returns
-  `false`).
-- **Subscripts**: a `subscript` compiles to Nim `` `[]` `` (getter) and
-  `` `[]=` `` (setter, if a `set` accessor exists) proc overloads. Reads and
-  writes on user types resolve through `Registry.find_subscripts`, which
-  includes extension subscripts. Getter `self` is a plain parameter, setter
-  `self` is `var` for value types.
-- **Variadic parameters**: `func f(_ xs: Int...)` declares `xs: seq[int]`;
-  call sites collect the matching trailing arguments into `@[...]` (or
-  `newSeq[T]()` when empty). Parameters after the variadic one must be labeled
-  at the call site.
-- **`fallthrough`**: the switch `if` chain inlines the next case's body when a
-  case body ends with `fallthrough`; no pattern test or payload binding happens
-  for the fallen-into case. Nested cases are generated in their own scope and
-  `break` still exits the whole switch via its block label.
-- **`for case`**: parses the case pattern and inlines
-  `if not (<pattern condition>): continue` plus the pattern bindings at the top
-  of the loop body.
-- **Compiler literals**: `#file`, `#line`, `#column`, `#function` are parsed as
-  `A.MagicLit` and emitted as literals; `#function` uses the current procedure
-  description (`main` at top level, otherwise `name()`).
-- **Conditional compilation**: `lexer.preprocess` blanks inactive branches
-  before parsing; the parser is unaware of `#if`.
-- **Custom operators**: operator functions are emitted as Nim backtick procs
-  (`` proc `**`*(...) ``), including static operators of a type/extension.
-  `gen_binary`/`gen_unary`/`gen_postfix_unary` first look up a user operator
-  function with matching operand types and emit an explicit call (so operator
-  precedence from the Swim parser is preserved regardless of Nim's own
-  operator precedence).
-- **Nested types** are emitted as flattened Nim types (`Outer_Inner`). Member
-  lookup understands `Outer.Inner` type references and unqualified nested
-  names inside the enclosing type (including static contexts).
-- **Static computed properties** generate `Type_name()` getter procs and
-  `Type_name_set(value)` setter procs (no `self` parameter); reads/writes on
-  `Type.name` call them explicitly.
-- **Static subscripts** generate dedicated accessor procs
-  (`swimStaticSubscriptGet...` / `...Set...`) because Nim's `[]` syntax cannot
-  be used on types; `Type[index]` expression/assignment codegen calls them
-  directly.
+- All values are pointers to refcounted objects (`SwimValue = SwimObj*`). Each
+  object has an `_Atomic int64_t` refcount and a `SwimType*` descriptor holding
+  its kind, name, parent, fields, enum cases, methods, properties and raw
+  values.
+- **Value semantics**: storing a value scans its descriptor kind and
+  deep-copies value types (`SwimCopy`), while reference types (classes,
+  closures, frames) are retained.
+- **Assignment/coercion**: stores are wrapped in `SwimCoerce`, and expression
+  results are materialised into cleanup-managed temporaries.
+- **Dispatch**: method calls become `SwimCallMethod(recv, "name", "labels",
+  argc, argv)`; the runtime matches signature by name/labels/arity/argument
+  types, fills defaults, binds inout cells and invokes a uniform
+  `SwimValue (*)(SwimFrame*, int, SwimValue*)` function.
+- **Type descriptors** are emitted with forward declarations, then one
+  `__swim_register()` registers every method, initializer, property,
+  subscript, operator, enum case and `deinit`.
+- **Statements** lower to runtime iteration, pattern predicates, `setjmp`
+  exception frames, `defer` scopes and `goto`-based break/continue.
+- **ARC**: temporaries are released at statement boundaries; frames and
+  closures own their references.  Weak/unowned holders register with their
+  target's weak list; `deinit` runs derived-first after the refcount reaches
+  zero.
+- **Errors**: C compiler diagnostics are mapped back through `line_map`.
 
 ### 5. Compiler CLI (`cli.py`)
 
@@ -216,107 +153,174 @@ Key designs:
 - Generated files and binaries are cached in the system temp directory under
   `Swim-build-cache/src-<hash>`. The cache key includes the paths and sources of
   **all** project modules (any change recompiles), the compiler version, the
-  runtime source hash, Nim flags and the memory-management mode.
+  runtime source hash, C compiler flags and the memory-management mode.
 - `deps` reuses `modules.Project` to print the import graph and dependency
   execution order.
-- Nim subprocess: `nim c --mm:arc --hints:off --warnings:off --path:<runtime>`.
+- C compiler subprocess: `cc -std=c11 -O2 -w -I runtime <generated.c>
+  runtime/swimrt_core.c runtime/swimrt_collections.c runtime/swimrt_call.c
+  runtime/swimrt_builtin.c runtime/swimrt_error.c -o <binary> -lm`.
   `--mm:arc` is the fixed memory-management strategy (ARC, no tracing GC); the
   `NIM_MEMORY_MANAGEMENT` constant in `cli.py` also participates in the cache
   key.
 
 ## Memory management
 
-- Generated programs are always compiled with `--mm:arc`: class instances use
-  reference counting and are released immediately when the count reaches zero.
-- Nim ref-object cycles are not collected (ARC has no cycle collector), which
-  matches Swift ARC. The runtime does not introduce a GC.
-- Value types (`struct`/`enum`) do not involve reference counting; recursive
-  enums are represented with `ref`, so they are ARC-managed.
+- Every heap object (`SwimObj`) starts with an `_Atomic int64_t` reference
+  count and a `SwimType*` descriptor. `SwimRetain`/`SwimRelease` use C11
+  atomic operations (`memory_order_relaxed` increments, `acq_rel`
+  decrements); the object is freed when the count reaches zero. This is the
+  same model as Swift's ARC and makes objects safe to share between threads.
+- Reference types (classes, closures, frames) are retained on store. Value
+  types (String, Array, Dictionary, Set, Tuple, struct, enum, Optional, Range)
+  are copied on store by `SwimCopy`, preserving Swift value semantics.
+- There is no tracing GC and no cycle collector. As with Swift ARC, reference
+  cycles leak unless broken manually with `weak`/`unowned` properties.
+- `weak` storage keeps a refcounted holder object registered in the target's
+  intrusive weak list. The holder never retains the target; when the target's
+  reference count reaches zero the runtime zeroes every registered holder slot
+  before running class deinitializers. `unowned` uses the same holder without
+  optionality and traps if the target was released.
+- Classes declare a `deinit`; the runtime walks the class chain most-derived
+  first after the refcount hits zero (weak slots are zeroed first), then frees
+  the stored members. Objects are marked as destroying while `deinit` runs so
+  the temporary self reference used by the generated frame cannot trigger a
+  second destruction.
+- Each function activation allocates a `SwimFrame` (a refcounted slot array).
+  Closures capture their creating frame and retain it. Frames and temporaries
+  are released by `__attribute__((cleanup))` on normal control flow. Exception
+  unwinding uses `setjmp`/`longjmp` (C cleanups cannot run during a longjmp);
+  the runtime runs pending `defer` blocks explicitly while unwinding, but
+  temporaries in unwound C frames are not released.
+- The cache key includes the runtime sources' hash, so changes to the ARC
+  runtime automatically rebuild cached programs.
 
-## Runtime (`runtime/swimrt.nim`)
+## Runtime (`runtime/swimrt*.c`)
 
-- Re-exports `options`, `tables`, `sequtils`, `strutils`, `math`, `algorithm`,
-  `sets`, `hashes`, `os`, etc.
-- Defines the Swift-style API: `swimStr` (print formatting), `print`, array/
-  string/dictionary helpers, optional helpers, `swimOptFlatMap`, sort
-  templates, stride iterators, protocol concepts, character classification,
-  hash/exception helpers, etc.
-- Changing the runtime changes the cache key of generated programs, so they
-  recompile automatically.
+The runtime is a dependency-free C11 library (only libc + libm) implementing
+the dynamic object model and the Swift-style standard library:
+
+- `swimrt.h` — the public ABI. Every generated program includes it. It defines
+  `SwimValue`/`SwimObj`, `SwimKind`, `SwimType`/`SwimFieldDesc`/`SwimCaseDesc`,
+  `SwimMethodEntry`/`SwimPropDesc`, the primitive/collection constructors,
+  ARC functions, frame access, dispatch, member/subscript access, operators,
+  iterators, exceptions/`defer` and registration hooks.
+- `swimrt_core.c` — allocation, atomic retain/release, value-semantics
+  `SwimCopy`, frames/globals, strings, double formatting, description/printing,
+  equality/ordering/hashing, operators, optionals, coercion/casts, pattern
+  helpers and fatal errors.
+- `swimrt_collections.c` — arrays, dictionaries, sets, tuples, ranges,
+  iterators (lazy for ranges; insertion order for dictionaries), slicing,
+  stable merge sort, `map`/`filter` helpers.
+- `swimrt_call.c` — the dynamic dispatcher: membership tables, signature
+  binding (labels/defaults/variadic/inout), method/static/global/closure
+  invocation, property/subscript access (including observer proxies),
+  initializer delegation, enum construction, binding method/function
+  references as closures, and program start-up.
+- `swimrt_builtin.c` — the Swift-style library: string/array/dictionary/set/
+  optional/number/character methods, higher-order functions, conversions,
+  free functions (`print`, `min`, `max`, `abs`, `sqrt`, `zip`, ...) and
+  static constructors (`Int(...)`, `String(repeating:count:)`,
+  `Array(repeating:count:)`, enum `allCases`/raw-value initializers).
+- `swimrt_error.c` — `setjmp`/`longjmp` exception frames, per-scope `defer`
+  lists, error value construction and the type-matching helpers used by
+  `catch`.
+
+Generated code never modifies the runtime; it only calls it. Changing the
+runtime changes the cache key of generated programs, so they rebuild
+automatically.
 
 ## How to extend
 
 ### Add a standard-library method
 
-1. Add a `proc`/`template` to `runtime/swimrt.nim` (avoid name collisions with
-   existing symbols).
-2. Register it in the corresponding place in `codegen.py`:
-   - collection/string methods → `_array_method`, `_string_method`,
-     `_dict_method`, `_set_method`, `_numeric_method`, `_optional_method`;
-   - properties → `code_builtin_property`;
-   - static members/constructors → `code_prim_static_member`,
-     `code_prim_static_call`, `code_builtin_type_construct`;
-   - global functions → `code_builtin_free_call`.
-3. Add `tests/cases/*.sw` plus expected output, then run
+1. Implement the behaviour in `runtime/swimrt_builtin.c` (for methods that
+   only inspect `argv`) or in `runtime/swimrt_core.c`/`swimrt_collections.c`
+   (for values that need new object kinds).
+2. Add a test in `tests/cases/*.sw` with expected output, then run
    `python3 tests/run_tests.py`.
+3. If the method needs special *lowering* (new syntax or a renamed runtime
+   entry point), handle it in `src/swimc/codegen_c.py` (for example the
+   subscript/observer/optional-chaining paths).
 
 ### Add a built-in module
 
-Two kinds of built-in modules exist:
+Built-in module names (`Foundation`, `Swift`, `Math`, ...) are no-ops:
+`modules.BUILTIN_MODULES` accepts the import and the C runtime already
+provides the corresponding API. To add one, implement the API in
+`runtime/swimrt_builtin.c` and register the name in `modules.py`.
 
-1. **No-op modules** (`Foundation`, `Swift`, `Math`, ...): the name is
-   registered in `modules.BUILTIN_MODULES` and importing it does nothing,
-   because `runtime/swimrt.nim` already provides the Swift-style API.  To add
-   one of these, implement the API in `swimrt.nim` and register the name.
-2. **Native modules**: a separate Nim module in `runtime/` is linked into the
-   generated program, which is how a whole Nim library is exposed to Swim.
-   `Nimx` (`runtime/swimnimx.nim`) is the oldest one; `FerroUI`
-   (`runtime/swimferroui.nim`, the binding of SwimUI) is the reference for a
-   binding of a library that is not written in Nim:
-   - register the Swim name and its Nim module in `modules.NATIVE_MODULES`
-     (`{"FerroUI": "swimferroui"}`); `gen_header` then emits
-     `import swimferroui` into the generated Nim, and `load_project` records
-     the import in `Project.native_modules`;
-   - register the Swim-facing functions in the module's own table
-     (`codegen.FERROUI_FUNCS`): `name -> (nim proc, [(argument label, kind)],
-     return kind)`, where kind is `int`, `double`, `string`, `bool` or
-     `closure` (`() -> Void`; supports the trailing closure syntax).  The
-     kinds of the module are its own map (`FERROUI_KINDS`); the return kinds
-     are in `NATIVE_RESULT_TYPES`.  `CodeGen.code_native_call` (reached through
-     `code_nimx_call`, `code_zeta_call` or `code_ferroui_call`) generates the
-     call, matches argument labels and type-checks the arguments;
-   - keep the Nim wrapper's signature identical (positional order) to the
-     table entry;
-   - build programs with `--nim-arg:--path:<library>` so the Nim compiler can
-     find the wrapped library.  `FerroUI` instead builds a shared library
-     (`ffi/`, a Rust `cdylib`) once with `scripts/build-ffi.sh`; the Nim module
-     declares its C ABI with `{.importc, cdecl, dynlib.}` and finds it in
-     `build/` (override: `-d:swimFerroUILibDir=<dir>`), so a program build
-     needs no C compiler arguments at all.  Everything native stays on the
-     other side of a flat ABI of integers, doubles, strings and C callbacks.
-3. For compiler-only behaviour (special static members, operators, ...) of a
-   built-in name, implement it in `codegen.py`.
-4. Add a test that imports the module name and compiles.
+#### Add a native module (C backend)
+
+A native module binds a C library behind Swift-syntax-only declarations.  The
+`FerroUI` module of this fork is the reference:
+
+1. **Register the name** in `modules.NATIVE_MODULES` and let `load_project`
+   record it on the project (`Project.native_modules`).  Retired Nim-era names
+   go in `RETIRED_NATIVE_MODULES` so that importing them explains itself.
+2. **Describe the functions** in a table of their own (for `FerroUI`,
+   `src/swimc/native_ferroui.py`): Swift name → (C function,
+   `[(argument label, kind)]`, result kind).  The kinds are `int`, `double`,
+   `string`, `bool` and `closure` (`() -> Void`, which also takes a trailing
+   closure); results may also be `void`.
+3. **Check the calls** in `checker.py`: the import must be present, labels must
+   exist and appear once, and every argument must have the kind's type.  The
+   checker reports errors at the `.sw` location.
+4. **Emit the calls** in `codegen_c.py`: include the module's header when the
+   import is present and turn each call into a direct C call with the arguments
+   in the table's order.  `CodeGen.native_call_code` does the label matching.
+5. **Compile and link** in `cli.py`: a program with the module compiles the
+   module's C source (a *shim*, `runtime/swimferroui.c`) into itself, adds the
+   include directory of the library's header and links the shared library
+   (`-L … -l … -Wl,-rpath,…`).  Include the shim and its headers in the build
+   cache signature.
+6. **Write the C shim** in `runtime/`: it receives the dynamic `SwimValue`s of
+   generated code, converts them to the C ABI of the library, calls it, and
+   converts the results back.  Closures cross as a C callback plus an opaque
+   `int64_t`: keep the `SwimValue` closure in a cell, pass a trampoline and the
+   cell's address, and run the closure with `SwimCallValue`.
+7. **Tests**: a compiler test that the module resolves and emits the expected C,
+   a test that the missing import is an error, and an end-to-end test that a
+   program builds against the library and runs.
+
+#### Fixes of this fork needed by the binding
+
+The `FerroUI` module and the view layer needed three code-generator fixes,
+each with a regression test in `tests/cases/`:
+
+- an unqualified **global read inside a method or a closure in a method**
+  resolved to `self.<name>` (and read `nil`): `expr_code` now checks the globals
+  before the `has_self` fallback (`42_global_in_method.sw`);
+- an **enum-case shorthand passed as an argument** (`.leading`) was emitted as
+  an untyped enum case, so the dynamic dispatcher could not bind the call and
+  reported `unknown function`: `gen_call` now resolves the parameter types of a
+  known free function and the arguments are generated with that expected type
+  (`43_enum_case_argument.sw`);
+- the **return-type walk** over a statement list walked into lists of non-node
+  values and crashed on some closure bodies (`_collect_return_types` now walks
+  only AST nodes).
 
 ### Add a language feature
 
 1. AST: add nodes in `ast_nodes.py`.
-2. Parsing: produce the nodes in the appropriate parser functions.
-3. Types/symbols (if needed): extend `types.py`.
-4. Generation: implement in `codegen.py`'s `gen_expr`/`gen_stmt` or the
-   specific declaration generator.
-5. Forward declarations/naming: check whether a new `ProcJob` or helper
-   procedure is needed.
+2. Front end: produce the nodes in the parser; extend `types.py` for symbol
+   tables / type resolution when needed.
+3. Static checking: teach `checker.py` the feature (type checking and
+   diagnostics).
+4. Backend: lower it in `codegen_c.py` (`gen_stmt`/`gen_expr_into`/
+   `expr_code`/declaration collection), calling into the runtime; add runtime
+   helpers in `runtime/` when the feature needs new value kinds or dispatch.
+5. Registration/metadata: if the feature adds members, register them through
+   the existing `register_*` helpers so dynamic dispatch can find them.
 6. Tests: cover at least the success path, the error path and interactions
    with existing features.
 
 ### Add a new kind of type member (example: subscripts)
 
 Subscript declarations are collected in `TypeInfo.subscripts` /
-`ExtensionInfo.subscripts` (see `types.py`) and generated by
-`CodeGen.add_subscript_jobs`. Call sites resolve them through
-`Registry.find_subscripts`; generic receivers use the protocol subscripts
-found by `CodeGen._generic_subscripts`.
+`ExtensionInfo.subscripts` (see `types.py`); `codegen_c.collect_subscript`
+emits a getter/setter pair and registers them as `__sub_get` / `__sub_set`.
+Call sites resolve to `SwimSubscriptGet`/`SwimSubscriptSet`, which dispatch to
+string/array/dictionary helpers or the registered user subscripts.
 
 ## Test framework
 
@@ -337,40 +341,32 @@ found by `CodeGen._generic_subscripts`.
 
 ## Known implementation trade-offs
 
-- Nim's `method` dynamic dispatch and `super` are implemented with impl procs
-  plus wrappers, so `Swim emit` contains method pairs for class methods.
-- The `swimOptFlatMap` template evaluates the outer expression once (saved in a
-  temporary); pure expressions are unaffected. If the base of an optional chain
-  has side effects, store it in a variable first.
-- Multi-line closures in argument position generate multi-line Nim; Nim's
-  parenthesis indentation rules are covered by tests.
-- Top-level variable types must be inferable from their initializer, otherwise
-  an explicit annotation is required.
-- Recursive enums use `ref` representation and therefore have reference
-  semantics (Swift recursive enums usually use `indirect`), and are managed by
-  ARC.
-- Reference cycles are not collected automatically (matching Swift ARC).
-- Multi-file modules merge into a single Nim module: declarations share one
-  flat namespace, and duplicate types/global variables across files are errors;
-  functions are de-duplicated by signature. Imported modules' top-level
-  statements run before the entry file.
-- Module resolution is path-based (no package manager/download): it searches
-  the importing file's directory, entry directory, cwd and `SWIM_PATH`; local
-  `.sw` files take precedence over built-in module names.
-- Observed properties cannot be `static` or declared in an extension (stored
-  properties are not allowed there). Their backing field is a normal Nim field,
-  so it appears in `Swim emit` and in the synthesized `$`/`==`/`hash` output
-  through the getter.
-- Failable initializers rely on the internal `bool`-returning init proc; the
-  generated Nim signature differs from the `.sw` signature (`Swim emit` shows
-  it). `init!` crashes on `nil` at the call site (like Swift's implicit unwrap).
-- Subscript declarations are supported for concrete types and extensions; the
-  concept generated for a protocol does not spell out subscript requirements,
-  they are checked when a generic body is instantiated.
-- Protocol/existential limitations still apply: `[any P]` and `Any` erasure
-  are not supported.
-- `#file`/`#line` are resolved from the composed source, so in multi-file
-  projects they report the entry file and composed line numbers.
+- **Dynamic runtime**: the C backend does not monomorphise generics or emit
+  specialised struct layouts. Every value is a refcounted object, so generic
+  functions/types work by type erasure and method dispatch by name+signature.
+  This trades raw speed for a much smaller backend; the emitted C is stable and
+  readable but allocates more than a static backend would.
+- **Static analysis is intentionally conservative**: `checker.py` implements
+  the checks required by the language and the test suite; deeply generic code
+  and built-in library calls fall back to dynamic dispatch instead of being
+  statically verified. The C backend is the final source of truth.
+- **Exception unwinding and cleanup**: `setjmp`/`longjmp` cannot run C cleanup
+  handlers, so `defer` blocks are executed by the runtime while unwinding, but
+  temporaries in the unwound C frames are not released. Avoid using thrown
+  errors as normal control flow in long-running loops.
+- **copy-on-store**: value types are deep-copied on every store. This keeps
+  Swift value semantics correct without COW bookkeeping, at the cost of copies
+  when large arrays/structs are passed around by value.
+- **Top-level variable types** must be inferable from their initializer,
+  otherwise an explicit annotation is required.
+- **Dict/set iteration order** is insertion order for dictionaries and
+  insertion order for sets; the language does not guarantee an order (tests
+  sort before printing when order matters).
+- **Integer overflow** follows C semantics; `%` is the C remainder operator and
+  integer `/` truncates toward zero.
+- Multi-file modules are merged into a single translation unit, so
+  declarations share one flat namespace (duplicate names across files are
+  compile errors).
 
 ## License
 

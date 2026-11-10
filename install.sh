@@ -14,9 +14,11 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "error: python3 is required (the Swim compiler is written in Python)." >&2
   exit 1
 fi
-if ! command -v nim >/dev/null 2>&1; then
-  echo "warning: 'nim' was not found in PATH; Swim needs it to compile programs." >&2
-  echo "         install Nim from https://nim-lang.org/install.html" >&2
+if ! command -v cc >/dev/null 2>&1 && ! command -v clang >/dev/null 2>&1 \
+   && ! command -v gcc >/dev/null 2>&1; then
+  echo "error: a C compiler (cc, clang or gcc) is required: Swim compiles" >&2
+  echo "       programs directly to C." >&2
+  exit 1
 fi
 
 if ! mkdir -p "$BINDIR" 2>/dev/null; then

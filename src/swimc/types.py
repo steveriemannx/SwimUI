@@ -47,7 +47,7 @@ ALLOWED_ATTRIBUTES = {
     "frozen",
 }
 
-UNSUPPORTED_PROPERTY_MODIFIERS = {"weak", "unowned", "lazy"}
+UNSUPPORTED_PROPERTY_MODIFIERS = {"lazy"}
 
 BUILTIN_CONFORMANCES = {
     "Equatable", "Comparable", "Hashable", "CustomStringConvertible",
@@ -258,6 +258,9 @@ class FieldInfo:
     # lives in a mangled backing field and access goes through generated
     # getter/setter procs.
     observers: list = field(default_factory=list)
+    # Weak / unowned stored reference semantics (only valid for class types).
+    weak: bool = False
+    unowned: bool = False
 
     @property
     def is_observed(self) -> bool:
@@ -346,6 +349,7 @@ class TypeInfo:
     is_builtin: bool = False
     parent: Any = None  # enclosing type for nested declarations
     nested: dict = field(default_factory=dict)  # leaf name -> TypeInfo
+    deinit: Any = None  # A.DeinitDecl for classes that declare one
 
     # -- helpers -----------------------------------------------------------
     @property
@@ -461,6 +465,10 @@ class Registry:
                         (fi.operator_fixity or "infix", fi.name),
                         []).append(fi)
             elif isinstance(decl, A.VarDecl):
+                gmods = set(getattr(decl, "modifiers", []))
+                if "weak" in gmods or "unowned" in gmods:
+                    self.error("'weak'/'unowned' are only supported on "
+                               "stored properties of classes", decl)
                 self.global_vars[decl.name] = decl
         # Pass 3: resolve superclass / conformances / extensions superclass
         for info in self.types.values():
@@ -546,9 +554,13 @@ class Registry:
         self.validate_attributes(member)
         mods = set(getattr(member, "modifiers", []))
         if isinstance(member, A.DeinitDecl):
-            self.error("deinit is not supported by Swim: ARC releases "
-                       "objects automatically and there are no cleanup hooks",
-                       member)
+            if info.kind != "class":
+                self.error("deinit is only allowed in classes "
+                           "(ARC releases value types automatically)", member)
+            if info.deinit is not None:
+                self.error("a class may declare at most one deinit", member)
+            info.deinit = member
+            return
         if isinstance(member, (A.VarDecl, A.SubscriptDecl)):
             bad = mods & UNSUPPORTED_PROPERTY_MODIFIERS
             if bad:
@@ -556,6 +568,8 @@ class Registry:
                            "by Swim yet", member)
         is_static = "static" in mods or "class" in mods
         if isinstance(member, A.VarDecl):
+            weak_kind, _weak_ty = self._validate_weak_property(
+                member, info, env, mods, is_static)
             observers = [a for a in member.accessors
                          if a.kind in ("willSet", "didSet")]
             accessors = [a for a in member.accessors
@@ -591,7 +605,9 @@ class Registry:
                 fi = FieldInfo(name=member.name, ty=ty,
                                is_let=member.is_let, default=member.init,
                                owner=info, order=len(info.fields),
-                               is_static=is_static, line=member.line)
+                               is_static=is_static, line=member.line,
+                               weak=(weak_kind == "weak"),
+                               unowned=(weak_kind == "unowned"))
                 if is_static:
                     info.static_vars[member.name] = fi
                 else:
@@ -640,6 +656,38 @@ class Registry:
         elif isinstance(member, A.TypeAliasDecl):
             key = member.name if info is None else f"{info.name}.{member.name}"
             self.aliases[key] = member
+
+    def _weak_modifier(self, mods: set) -> str | None:
+        if "weak" in mods:
+            return "weak"
+        if "unowned" in mods:
+            return "unowned"
+        return None
+
+    def _validate_weak_property(self, member: A.VarDecl, info: TypeInfo,
+                                env: dict, mods: set,
+                                is_static: bool) -> tuple:
+        weak_kind = self._weak_modifier(mods)
+        if weak_kind is None:
+            return None, UNKNOWN
+        if is_static:
+            self.error(f"'{weak_kind}' cannot be applied to a static "
+                       "property", member)
+        if member.is_let:
+            self.error(f"a '{weak_kind}' property must be a 'var'", member)
+        if member.accessors:
+            self.error(f"'{weak_kind}' requires a stored property "
+                       "(get/set accessors and property observers are not "
+                       "supported on weak/unowned properties yet)", member)
+        ty = self.resolve_type(member.ty, env) if member.ty else UNKNOWN
+        base = ty.inner if ty.is_optional else ty
+        target = self.type_info(base)
+        if target is None or target.kind != "class":
+            self.error(f"'{weak_kind}' properties must have a class type",
+                       member)
+        if weak_kind == "weak" and not ty.is_optional:
+            self.error("a 'weak' property must be optional", member)
+        return weak_kind, ty
 
     def _fill_enum(self, info: TypeInfo, decl: A.EnumDecl, env: dict) -> None:
         if decl.raw_type is not None:
@@ -833,7 +881,7 @@ class Registry:
                                    "extensions (stored properties cannot be "
                                    "added by an extension)", member)
             if isinstance(member, A.DeinitDecl):
-                self.error("deinit is not supported by Swim yet", member)
+                self.error("deinit is only allowed in class declarations, not in extensions", member)
             is_static = "static" in mods or "class" in mods
             if isinstance(member, A.FuncDecl):
                 fi = self._func_info(member, owner=None, env=env)

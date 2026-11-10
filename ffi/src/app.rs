@@ -6,7 +6,7 @@
 //! lifetime, which shows it and runs the message loop until it closes.
 
 use ferroui_base::styling::{Styles, ThemeVariant};
-use ferroui_base::{ferro_class, ferro_impl_classes, instantiate, FerroObjectImpl, Ref};
+use ferroui_base::{ferro_class, instantiate, FerroObjectImpl, Ref};
 use ferroui_controls::{AppBuilder, Application, ApplicationImpl, ApplicationImplExt, NewApplication};
 use ferroui_desktop::AppBuilderDesktopExtensions;
 use ferroui_themes_simple::SimpleTheme;

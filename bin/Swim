@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# swim compiler launcher
+# Swim compiler launcher
 set -euo pipefail
 SOURCE="${BASH_SOURCE[0]}"
 while [ -L "$SOURCE" ]; do

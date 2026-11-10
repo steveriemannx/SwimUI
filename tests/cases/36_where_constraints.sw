@@ -1,5 +1,5 @@
 // Generic where clauses become extra generic constraints (protocol
-// constraints are enforced through Nim concepts).
+// constraints are enforced through protocol constraints).
 func sortedValues<T>(_ values: [T]) -> [T] where T: Comparable {
     return values.sorted()
 }

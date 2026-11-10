@@ -1,0 +1,6 @@
+closure sees global
+method sees global
+member still wins: member
+member/41
+closure counter=41
+counter=41

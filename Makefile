@@ -16,7 +16,7 @@ help:
 	@echo "make ffi-release    build the Rust bridge (optimised)"
 	@echo "make demo           build and run the SwimUI demo"
 	@echo "make demo-snapshot  write ui/shots/demo.png and quit"
-	@echo "make binding-scene  run the scripted binding scene"
+	@echo "make binding-scene  run the scripted SwiftUI-layer scene"
 	@echo "make clean          clean caches and generated files"
 	@echo "make version        print the compiler version"
 
@@ -61,14 +61,14 @@ demo-snapshot:
 	./scripts/run-demo.sh --snapshot ui/shots/demo.png
 
 binding-scene:
-	./scripts/run-demo.sh --program tests/binding/BindingTest.sw \
-		--snapshot build/binding-before.png
+	./scripts/run-demo.sh --program tests/binding/SwiftUITest.sw \
+		--snapshot build/scene.png
 
 clean:
 	rm -rf .Swim-cache __pycache__ src/swimc/__pycache__ tests/__pycache__
-	rm -f examples/*.nim examples/programs/*.nim
+	rm -f examples/*.c examples/programs/*.c
 	find . -name '*.pyc' -delete
-	rm -rf build/binding-before.png build/binding-before.png.after.png
+	rm -rf build/test build/demo build/smoke.png build/scene.png
 
 version:
 	$(SWIM) version

@@ -34,7 +34,10 @@ enum
     FERRO_SWIM_KIND_CHECK_BOX = 7,
     FERRO_SWIM_KIND_SLIDER = 8,
     FERRO_SWIM_KIND_PROGRESS_BAR = 9,
-    FERRO_SWIM_KIND_SCROLL_VIEWER = 10
+    FERRO_SWIM_KIND_SCROLL_VIEWER = 10,
+    FERRO_SWIM_KIND_PANEL = 11,
+    FERRO_SWIM_KIND_FLEX_PANEL = 12,
+    FERRO_SWIM_KIND_TOGGLE_SWITCH = 13
 };
 
 /* A double property (ferro_swim_set_f64). */
@@ -71,7 +74,14 @@ enum
     FERRO_SWIM_BOOL_IS_VISIBLE = 1,
     FERRO_SWIM_BOOL_IS_CHECKED = 2,
     FERRO_SWIM_BOOL_IS_INDETERMINATE = 3,
-    FERRO_SWIM_BOOL_IS_ENABLED = 4
+    FERRO_SWIM_BOOL_IS_ENABLED = 4,
+    FERRO_SWIM_BOOL_CLIP_TO_BOUNDS = 5
+};
+
+/* An integer property (ferro_swim_set_i32). */
+enum
+{
+    FERRO_SWIM_I32_MAX_LINES = 1
 };
 
 /* A brush property (ferro_swim_set_color); the value is 0xAARRGGBB. */
@@ -153,9 +163,38 @@ void ferro_swim_set_decorations(int64_t handle, int32_t mode);
  * (window, border, button, scroll viewer); `parent` 0 is a no-op. */
 void ferro_swim_add_child(int64_t parent, int64_t child);
 
+/* Inserts a control into a parent at `index`.
+ *
+ * A panel (11 PANEL, 12 FLEX_PANEL, canvas, stack panel) keeps an ordered list,
+ * so `index` is where the child lands; an index past the end appends it.  A
+ * border holds a single child, so the index has to be 0; any other index is an
+ * error.  A content control (window, scroll viewer, button, check box, toggle
+ * switch) holds one boxed content, which the child replaces, so the index is
+ * ignored.  A parent that holds no children is an error. */
+void ferro_swim_insert_child(int64_t parent, int32_t index, int64_t child);
+
+/* Removes a control from a parent.  In a panel the child is taken out of the
+ * list (and a child that is not in it is a no-op); a border and a content
+ * control lose their single child, whatever `child` names.  `parent` 0 is a
+ * no-op. */
+void ferro_swim_remove_child(int64_t parent, int64_t child);
+
+/* Removes every child of a parent; a border and a content control lose their
+ * single child.  `parent` 0 is a no-op. */
+void ferro_swim_clear_children(int64_t parent);
+
+/* Destroys the control of a handle once no other reference holds it: the
+ * handle stops being valid for the calls that take a handle of that control,
+ * and the control goes away with the last reference -- the visual tree, or
+ * another handle.  Destroying a handle that is already gone is a no-op, and a
+ * control that is still a child of the tree stays alive there until its parent
+ * drops it. */
+void ferro_swim_destroy(int64_t handle);
+
 void ferro_swim_set_f64(int64_t handle, int32_t property, double value);
 void ferro_swim_set_str(int64_t handle, int32_t property, const char *value);
 void ferro_swim_set_bool(int64_t handle, int32_t property, int32_t value);
+void ferro_swim_set_i32(int64_t handle, int32_t property, int32_t value);
 void ferro_swim_set_color(int64_t handle, int32_t property, uint32_t argb);
 void ferro_swim_set_thickness(int64_t handle, int32_t property, double left, double top, double right, double bottom);
 void ferro_swim_set_enum(int64_t handle, int32_t property, int32_t value);
@@ -170,8 +209,31 @@ int32_t ferro_swim_get_bool(int64_t handle, int32_t property);
 /* Sets the size and, when the control is a child of a canvas, its position. */
 void ferro_swim_set_frame(int64_t handle, double x, double y, double width, double height);
 
+/* Sets the layout of a flex panel (12 FLEX_PANEL); any other control is an
+ * error, and so is an unknown value, in which case the panel is left as it
+ * was.
+ *
+ * `direction` is the main axis of the panel:
+ *   0 Row, 1 RowReverse, 2 Column, 3 ColumnReverse.
+ * `justify` packs the items along that axis:
+ *   0 FlexStart, 1 FlexEnd, 2 Center, 3 SpaceBetween, 4 SpaceAround,
+ *   5 SpaceEvenly.
+ * `align` aligns the items across it:
+ *   0 FlexStart, 1 FlexEnd, 2 Center, 3 Stretch.
+ * `column_spacing` and `row_spacing` are the gaps between the lines and the
+ * items, in points. */
+void ferro_swim_set_flex(int64_t handle, int32_t direction, int32_t justify, int32_t align, double column_spacing, double row_spacing);
+
+/* Sets the flex grow factor of a control: 0 keeps its size, 1 and more share
+ * the free space of the flex panel the control is a child of along the main
+ * axis.  It is what makes a spacer expand. */
+void ferro_swim_set_grow(int64_t handle, double grow);
+
 /* Subscribes to an event; the subscription lives until the application ends. */
 void ferro_swim_on(int64_t handle, int32_t event, ferro_swim_cb cb, int64_t user);
+
+/* Runs `cb(user)` once, `delay_ms` from now, on the UI thread. */
+void ferro_swim_after(double delay_ms, ferro_swim_cb cb, int64_t user);
 
 /* Closes the main window. */
 void ferro_swim_close(int64_t handle);

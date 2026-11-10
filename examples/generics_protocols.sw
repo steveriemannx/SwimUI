@@ -1,4 +1,4 @@
-// Generics and protocols (compiled to Nim concepts, checked statically)
+// Generics and protocols (compiled to protocol constraints, checked statically)
 protocol Shape {
     func area() -> Double
     var name: String { get }

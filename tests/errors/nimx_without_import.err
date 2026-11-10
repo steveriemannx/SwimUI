@@ -1,1 +1,1 @@
-is provided by the Nimx module; add 'import Nimx'
+'nimxWindow' was provided by the retired Nimx native module; use 'import FerroUI' (the C GUI binding of SwimUI) instead
